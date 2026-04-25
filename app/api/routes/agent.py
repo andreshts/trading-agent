@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends
 
 from app.api.deps import (
     get_ai_signal_service,
+    get_market_service,
     get_paper_executor,
     get_risk_manager,
     get_system_state,
@@ -74,8 +75,12 @@ async def autonomous_tick(
     risk_manager: RiskManager = Depends(get_risk_manager),
     executor: PaperTradingExecutor = Depends(get_paper_executor),
     system_state: SystemStateService = Depends(get_system_state),
+    market_service: MarketService = Depends(get_market_service),
 ) -> AgentTickResult:
-    current_price = request.current_price or MarketService.extract_current_price(request.market_context)
+    current_price = request.current_price
+    if current_price is None:
+        current_price = await market_service.get_current_price(request.symbol, request.market_context)
+
     closed_positions = []
 
     if current_price is not None:
@@ -97,7 +102,15 @@ async def autonomous_tick(
             reason="Ya existe una posición abierta para el símbolo.",
         )
 
-    signal = await signal_service.generate_signal(request)
+    enriched_request = request.model_copy(
+        update={
+            "market_context": MarketService.with_current_price_context(
+                request.market_context,
+                current_price,
+            )
+        }
+    )
+    signal = await signal_service.generate_signal(enriched_request)
     account_state = system_state.get_account_state()
     risk_decision = risk_manager.validate_trade(signal, account_state)
 

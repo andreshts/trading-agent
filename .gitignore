@@ -7,3 +7,5 @@ pytest-cache-files-*/
 *.log
 *.db
 *.db-*
+frontend/node_modules/
+frontend/dist/

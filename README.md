@@ -12,6 +12,32 @@ copy .env.example .env
 uvicorn app.main:app --reload
 ```
 
+## Ejecutar web React
+
+```bash
+cd ..\frontend
+npm install
+npm run dev
+```
+
+La web usa `http://localhost:8000` como API por defecto. Si necesitas otra URL, define
+`VITE_API_BASE_URL`.
+
+## Ejecutar loop autónomo
+
+Con el backend levantado, este script llama periódicamente a `/agent/autonomous/tick` y deja
+que el backend obtenga el precio de mercado configurado:
+
+```bash
+python scripts/autonomous_loop.py --symbols BTCUSDT,ETHUSDT --interval-seconds 60
+```
+
+Para probar una sola iteración:
+
+```bash
+python scripts/autonomous_loop.py --symbols BTCUSDT --once
+```
+
 Endpoints principales:
 
 - `GET /health`

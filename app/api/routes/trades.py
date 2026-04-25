@@ -1,8 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.deps import get_paper_executor
+from app.api.deps import get_market_service
 from app.api.deps import get_system_state
 from app.schemas.trade import ClosePositionRequest, PaperPosition, PaperTradeRequest, PaperTradeResult
+from app.services.market_service import MarketService
 from app.services.paper_trading import PaperTradingExecutor
 from app.services.system_state import SystemStateService
 
@@ -27,9 +29,25 @@ async def execute_paper_trade(
 async def list_positions(
     status: str | None = Query(default=None, pattern="^(OPEN|CLOSED|open|closed)$"),
     limit: int = Query(default=100, ge=1, le=500),
+    include_unrealized: bool = Query(default=True),
     executor: PaperTradingExecutor = Depends(get_paper_executor),
+    market_service: MarketService = Depends(get_market_service),
 ) -> list[PaperPosition]:
-    return executor.list_positions(status=status, limit=limit)
+    positions = executor.list_positions(status=status, limit=limit)
+    if not include_unrealized:
+        return positions
+
+    prices: dict[str, float | None] = {}
+    for position in positions:
+        if position.status != "OPEN":
+            continue
+        if position.symbol not in prices:
+            prices[position.symbol] = await market_service.get_current_price(position.symbol)
+
+    return [
+        executor.enrich_unrealized_pnl(position, prices.get(position.symbol))
+        for position in positions
+    ]
 
 
 @router.post("/positions/{position_id}/close", response_model=PaperPosition)

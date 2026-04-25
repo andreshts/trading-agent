@@ -8,6 +8,7 @@ from app.providers.openai_provider import OpenAIProvider
 from app.services.ai_signal_service import AISignalService
 from app.services.audit_logger import AuditLogger
 from app.services.kill_switch import KillSwitchService
+from app.services.market_service import MarketService
 from app.services.paper_trading import PaperTradingExecutor
 from app.services.risk_manager import RiskManager
 from app.services.system_state import SystemStateService
@@ -53,6 +54,14 @@ def get_risk_manager() -> RiskManager:
         default_order_quantity=settings.default_order_quantity,
         kill_switch=get_kill_switch(),
         audit_logger=get_audit_logger(),
+    )
+
+
+def get_market_service() -> MarketService:
+    settings = get_settings()
+    return MarketService(
+        provider=settings.market_data_provider,
+        timeout_seconds=settings.market_data_timeout_seconds,
     )
 
 

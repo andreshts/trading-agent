@@ -41,6 +41,8 @@ class PaperPosition(BaseModel):
     exit_price: float | None = None
     exit_reason: str | None = None
     realized_pnl: float | None = None
+    current_price: float | None = None
+    unrealized_pnl: float | None = None
     risk_amount: float
     opened_at: datetime
     closed_at: datetime | None = None

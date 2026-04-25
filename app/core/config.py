@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     app_name: str = "Trading AI Agent"
     app_env: str = "development"
     debug: bool = True
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
     database_url: str = "sqlite:///./trading_agent.db"
 
@@ -21,6 +22,9 @@ class Settings(BaseSettings):
     trading_enabled: bool = True
     paper_trading_enabled: bool = True
     real_trading_enabled: bool = False
+
+    market_data_provider: Literal["binance", "context"] = "binance"
+    market_data_timeout_seconds: float = Field(default=5, gt=0)
 
     max_daily_loss: float = Field(default=30, ge=0)
     max_weekly_loss: float = Field(default=80, ge=0)

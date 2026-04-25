@@ -102,7 +102,11 @@ class PaperTradingExecutor:
             self.audit_logger.record("paper_position_closed", schema.model_dump(mode="json"))
         return schema
 
-    def list_positions(self, status: str | None = None, limit: int = 100) -> list[PaperPositionSchema]:
+    def list_positions(
+        self,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[PaperPositionSchema]:
         from sqlalchemy import select
 
         with SessionLocal() as db:
@@ -111,6 +115,26 @@ class PaperTradingExecutor:
                 query = query.where(PaperPosition.status == status.upper())
             positions = db.scalars(query).all()
             return [PaperPositionSchema.model_validate(position) for position in positions]
+
+    @staticmethod
+    def enrich_unrealized_pnl(
+        position: PaperPositionSchema,
+        current_price: float | None,
+    ) -> PaperPositionSchema:
+        if position.status != "OPEN" or current_price is None:
+            return position
+
+        if position.action == "BUY":
+            unrealized_pnl = (current_price - position.entry_price) * position.quantity
+        else:
+            unrealized_pnl = (position.entry_price - current_price) * position.quantity
+
+        return position.model_copy(
+            update={
+                "current_price": current_price,
+                "unrealized_pnl": unrealized_pnl,
+            }
+        )
 
     def has_open_position(self, symbol: str) -> bool:
         from sqlalchemy import select

@@ -52,3 +52,15 @@ def test_closes_buy_with_profit() -> None:
 
     assert closed.status == "CLOSED"
     assert closed.realized_pnl == pytest.approx(1)
+
+
+def test_enriches_open_position_with_unrealized_pnl() -> None:
+    executor = PaperTradingExecutor(default_order_quantity=0.001)
+    opened = executor.execute(make_signal("BUY"))
+    position = executor.list_positions(status="OPEN", limit=1)[0]
+
+    enriched = executor.enrich_unrealized_pnl(position, current_price=65200)
+
+    assert enriched.id == opened.id
+    assert enriched.current_price == 65200
+    assert enriched.unrealized_pnl == pytest.approx(1)
