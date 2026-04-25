@@ -7,6 +7,9 @@ from app.schemas.system import AccountState
 class RiskDecision(BaseModel):
     approved: bool
     reason: str
+    risk_amount: float = 0
+    max_allowed_risk: float = 0
+    quantity: float | None = None
 
 
 class RiskValidationRequest(BaseModel):
@@ -46,4 +49,3 @@ class RiskLimits(BaseModel):
     max_trades_per_day: int = Field(..., ge=0)
     max_risk_per_trade_percent: float = Field(..., gt=0)
     min_confidence: float = Field(..., ge=0, le=1)
-

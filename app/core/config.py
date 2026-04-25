@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     app_env: str = "development"
     debug: bool = True
 
-    database_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/trading_agent"
+    database_url: str = "sqlite:///./trading_agent.db"
 
     ai_provider: Literal["mock", "openai", "gemini"] = "mock"
     openai_api_key: str = "replace_me"
@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     max_trades_per_day: int = Field(default=5, ge=0)
     max_risk_per_trade_percent: float = Field(default=1, gt=0)
     min_confidence: float = Field(default=0.55, ge=0, le=1)
+    default_order_quantity: float = Field(default=0.001, gt=0)
 
     kill_switch_enabled: bool = True
 
@@ -36,4 +37,3 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-

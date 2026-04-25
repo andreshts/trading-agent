@@ -50,6 +50,7 @@ def get_risk_manager() -> RiskManager:
         max_trades_per_day=settings.max_trades_per_day,
         max_risk_per_trade_percent=settings.max_risk_per_trade_percent,
         min_confidence=settings.min_confidence,
+        default_order_quantity=settings.default_order_quantity,
         kill_switch=get_kill_switch(),
         audit_logger=get_audit_logger(),
     )
@@ -60,5 +61,6 @@ def get_paper_executor() -> PaperTradingExecutor:
     return PaperTradingExecutor(
         paper_trading_enabled=settings.paper_trading_enabled,
         real_trading_enabled=settings.real_trading_enabled,
+        default_order_quantity=settings.default_order_quantity,
         audit_logger=get_audit_logger(),
     )

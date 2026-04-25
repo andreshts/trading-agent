@@ -1,3 +1,5 @@
+from app.db.models import AISignalLog
+from app.db.session import SessionLocal
 from app.providers.ai_provider import AIProvider, hold_signal
 from app.schemas.signal import SignalRequest, TradeSignal
 from app.services.audit_logger import AuditLogger
@@ -59,6 +61,7 @@ class AISignalService:
 
         if self.audit_logger:
             self.audit_logger.record("ai_signal", signal.model_dump(mode="json"))
+        self._persist_signal(signal)
         return signal
 
     @staticmethod
@@ -69,3 +72,18 @@ class AISignalService:
             market_context=request.market_context,
         )
 
+    @staticmethod
+    def _persist_signal(signal: TradeSignal) -> None:
+        try:
+            with SessionLocal() as db:
+                db.add(
+                    AISignalLog(
+                        symbol=signal.symbol,
+                        action=signal.action,
+                        confidence=signal.confidence,
+                        payload=signal.model_dump(mode="json"),
+                    )
+                )
+                db.commit()
+        except Exception:
+            pass

@@ -3,9 +3,13 @@ from pydantic import BaseModel, Field
 
 class AccountState(BaseModel):
     equity: float = Field(..., gt=0)
+    realized_pnl: float = 0
     daily_loss: float = Field(default=0, ge=0)
     weekly_loss: float = Field(default=0, ge=0)
+    peak_equity: float | None = None
+    drawdown: float = Field(default=0, ge=0)
     trades_today: int = Field(default=0, ge=0)
+    open_positions: int = Field(default=0, ge=0)
     trading_enabled: bool = True
 
 
@@ -27,4 +31,4 @@ class SystemStatus(BaseModel):
     real_trading_enabled: bool
     kill_switch: KillSwitchStatus
     audit_events: int
-
+    account: AccountState

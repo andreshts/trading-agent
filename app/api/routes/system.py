@@ -27,6 +27,7 @@ async def get_status(
         real_trading_enabled=settings.real_trading_enabled,
         kill_switch=kill_switch.get_status(),
         audit_events=audit_logger.count(),
+        account=account_state,
     )
 
 
@@ -66,10 +67,16 @@ async def enable_trading(
     return system_state.set_trading_enabled(True)
 
 
+@router.post("/simulation/reset", response_model=AccountState)
+async def reset_simulation(
+    system_state: SystemStateService = Depends(get_system_state),
+) -> AccountState:
+    return system_state.reset_simulation()
+
+
 @router.get("/audit")
 async def list_audit_events(
     limit: int = Query(default=100, ge=1, le=500),
     audit_logger: AuditLogger = Depends(get_audit_logger),
 ) -> list[dict]:
     return audit_logger.list_events(limit=limit)
-

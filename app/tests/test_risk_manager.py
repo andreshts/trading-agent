@@ -1,3 +1,5 @@
+import pytest
+
 from app.schemas.signal import TradeSignal
 from app.schemas.system import AccountState
 from app.services.kill_switch import KillSwitchService
@@ -12,6 +14,7 @@ def make_manager(kill_switch: KillSwitchService | None = None) -> RiskManager:
         max_risk_per_trade_percent=1,
         min_confidence=0.55,
         kill_switch=kill_switch or KillSwitchService(enabled=True),
+        default_order_quantity=0.001,
     )
 
 
@@ -46,6 +49,7 @@ def test_approves_valid_trade() -> None:
     decision = make_manager().validate_trade(make_signal(), make_account())
 
     assert decision.approved is True
+    assert decision.risk_amount == pytest.approx(1.4)
 
 
 def test_rejects_daily_loss_limit() -> None:
@@ -89,10 +93,40 @@ def test_rejects_sell_without_stop_loss() -> None:
 
 
 def test_rejects_risk_above_allowed_percent() -> None:
-    decision = make_manager().validate_trade(make_signal(risk_amount=11), make_account(equity=1000))
+    decision = make_manager().validate_trade(make_signal(risk_amount=0), make_account(equity=1000), quantity=0.01)
 
     assert decision.approved is False
     assert decision.reason == "Riesgo por operación superior al 1%"
+
+
+def test_ignores_ai_risk_amount_and_calculates_in_backend() -> None:
+    decision = make_manager().validate_trade(
+        make_signal(risk_amount=9999),
+        make_account(equity=1000),
+    )
+
+    assert decision.approved is True
+    assert decision.risk_amount == pytest.approx(1.4)
+
+
+def test_rejects_buy_with_stop_loss_above_entry() -> None:
+    decision = make_manager().validate_trade(
+        make_signal(stop_loss=65000),
+        make_account(),
+    )
+
+    assert decision.approved is False
+    assert decision.reason == "BUY inválido: stop_loss debe estar por debajo de entry_price"
+
+
+def test_rejects_sell_with_stop_loss_below_entry() -> None:
+    decision = make_manager().validate_trade(
+        make_signal(action="SELL", stop_loss=63000, take_profit=62000),
+        make_account(),
+    )
+
+    assert decision.approved is False
+    assert decision.reason == "SELL inválido: stop_loss debe estar por encima de entry_price"
 
 
 def test_rejects_active_kill_switch() -> None:
@@ -110,4 +144,3 @@ def test_rejects_low_confidence() -> None:
 
     assert decision.approved is False
     assert decision.reason == "Confianza inferior al mínimo permitido"
-
