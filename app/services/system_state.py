@@ -3,7 +3,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from sqlalchemy import delete, func, select
 
 from app.core.config import Settings
-from app.db.models import AccountSnapshot, PaperPosition
+from app.db.models import AccountSnapshot, ExchangeOrder, PaperPosition
 from app.db.session import SessionLocal, init_db
 from app.schemas.system import AccountState
 
@@ -93,6 +93,7 @@ class SystemStateService:
 
     def reset_simulation(self) -> AccountState:
         with SessionLocal() as db:
+            db.execute(delete(ExchangeOrder))
             db.execute(delete(PaperPosition))
             snapshot = AccountSnapshot(
                 equity=self._initial_equity,

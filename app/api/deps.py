@@ -100,6 +100,8 @@ def get_paper_executor() -> PaperTradingExecutor:
             max_notional_per_order=settings.max_notional_per_order,
             order_type=settings.binance_order_type,
             limit_time_in_force=settings.binance_limit_time_in_force,
+            place_oco_protection=settings.binance_place_oco_protection,
+            stop_limit_slippage_percent=settings.binance_stop_limit_slippage_percent,
             use_test_order_endpoint=settings.binance_use_test_order_endpoint,
             audit_logger=get_audit_logger(),
         )

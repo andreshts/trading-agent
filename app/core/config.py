@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     binance_use_test_order_endpoint: bool = False
     binance_order_type: Literal["market", "limit"] = "market"
     binance_limit_time_in_force: Literal["GTC", "IOC", "FOK"] = "IOC"
+    binance_place_oco_protection: bool = False
+    binance_stop_limit_slippage_percent: float = Field(default=0.1, ge=0)
+    binance_user_stream_enabled: bool = False
+    binance_testnet_ws_base_url: str = "wss://testnet.binance.vision/ws"
+    binance_live_ws_base_url: str = "wss://stream.binance.com:9443/ws"
     allowed_symbols: str = "BTCUSDT,ETHUSDT"
     max_notional_per_order: float = Field(default=100, gt=0)
 

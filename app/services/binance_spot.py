@@ -6,7 +6,7 @@ from urllib.parse import urlencode
 
 import httpx
 
-from app.db.models import PaperPosition
+from app.db.models import ExchangeOrder, PaperPosition
 from app.db.session import SessionLocal
 from app.schemas.signal import TradeSignal
 from app.schemas.system import AccountState
@@ -43,6 +43,19 @@ class BinanceSpotClient:
     def get_account(self) -> dict:
         return self._signed_request("GET", "/api/v3/account")
 
+    def create_listen_key(self) -> str:
+        response = self._api_key_request("POST", "/api/v3/userDataStream")
+        listen_key = response.get("listenKey")
+        if not listen_key:
+            raise RuntimeError("Binance did not return a listenKey.")
+        return listen_key
+
+    def keepalive_listen_key(self, listen_key: str) -> None:
+        self._api_key_request("PUT", "/api/v3/userDataStream", {"listenKey": listen_key})
+
+    def close_listen_key(self, listen_key: str) -> None:
+        self._api_key_request("DELETE", "/api/v3/userDataStream", {"listenKey": listen_key})
+
     def get_order(self, symbol: str, client_order_id: str) -> dict:
         return self._signed_request(
             "GET",
@@ -50,6 +63,23 @@ class BinanceSpotClient:
             {
                 "symbol": symbol.upper(),
                 "origClientOrderId": client_order_id,
+            },
+        )
+
+    def get_order_list(self, order_list_id: str) -> dict:
+        return self._signed_request(
+            "GET",
+            "/api/v3/orderList",
+            {"orderListId": order_list_id},
+        )
+
+    def cancel_order_list(self, symbol: str, order_list_id: str) -> dict:
+        return self._signed_request(
+            "DELETE",
+            "/api/v3/orderList",
+            {
+                "symbol": symbol.upper(),
+                "orderListId": order_list_id,
             },
         )
 
@@ -101,6 +131,38 @@ class BinanceSpotClient:
             params,
         )
 
+    def create_oco_sell_order(
+        self,
+        symbol: str,
+        quantity: float,
+        take_profit_price: float,
+        stop_price: float,
+        stop_limit_price: float,
+        stop_limit_time_in_force: str = "GTC",
+        test_order: bool = False,
+        list_client_order_id: str | None = None,
+    ) -> dict:
+        path = "/api/v3/orderList/oco"
+        params = {
+            "symbol": symbol.upper(),
+            "side": "SELL",
+            "quantity": self._format_decimal(quantity),
+            "aboveType": "LIMIT_MAKER",
+            "abovePrice": self._format_decimal(take_profit_price),
+            "belowType": "STOP_LOSS_LIMIT",
+            "belowStopPrice": self._format_decimal(stop_price),
+            "belowPrice": self._format_decimal(stop_limit_price),
+            "belowTimeInForce": stop_limit_time_in_force,
+            "newOrderRespType": "FULL",
+        }
+        if list_client_order_id:
+            params["listClientOrderId"] = list_client_order_id
+
+        if test_order:
+            return {"listClientOrderId": list_client_order_id, "listStatusType": "TEST_ORDER"}
+
+        return self._signed_request("POST", path, params)
+
     def _signed_request(
         self,
         method: str,
@@ -133,6 +195,27 @@ class BinanceSpotClient:
                 raise RuntimeError(f"Binance error {response.status_code}: {response.text}")
             return response.json() if response.text else {}
 
+    def _api_key_request(
+        self,
+        method: str,
+        path: str,
+        params: dict | None = None,
+    ) -> dict:
+        if not self.configured:
+            raise RuntimeError("Binance API key/secret are not configured.")
+
+        query = urlencode(params or {})
+        suffix = f"?{query}" if query else ""
+        with httpx.Client(timeout=self.timeout_seconds) as client:
+            response = client.request(
+                method,
+                f"{self.base_url}{path}{suffix}",
+                headers={"X-MBX-APIKEY": self.api_key},
+            )
+            if response.status_code >= 400:
+                raise RuntimeError(f"Binance error {response.status_code}: {response.text}")
+            return response.json() if response.text else {}
+
     @staticmethod
     def _format_decimal(value: float) -> str:
         return f"{value:.10f}".rstrip("0").rstrip(".")
@@ -149,6 +232,8 @@ class BinanceSpotExecutor(PaperTradingExecutor):
         max_notional_per_order: float,
         order_type: str = "market",
         limit_time_in_force: str = "IOC",
+        place_oco_protection: bool = False,
+        stop_limit_slippage_percent: float = 0.1,
         use_test_order_endpoint: bool = False,
         audit_logger: AuditLogger | None = None,
     ) -> None:
@@ -165,6 +250,8 @@ class BinanceSpotExecutor(PaperTradingExecutor):
         self.max_notional_per_order = max_notional_per_order
         self.order_type = order_type.lower()
         self.limit_time_in_force = limit_time_in_force.upper()
+        self.place_oco_protection = place_oco_protection
+        self.stop_limit_slippage_percent = stop_limit_slippage_percent
         self.use_test_order_endpoint = use_test_order_endpoint
 
     def execute(
@@ -197,6 +284,15 @@ class BinanceSpotExecutor(PaperTradingExecutor):
             quantity=trade_quantity,
             price=signal.entry_price,
         )
+        entry_order_record_id = self._persist_exchange_order(
+            order=order,
+            role="entry",
+            symbol=signal.symbol,
+            side="BUY",
+            order_type=self.order_type.upper(),
+            requested_quantity=trade_quantity,
+            requested_price=signal.entry_price,
+        )
         fill_price = self._average_fill_price(order) or signal.entry_price
         executed_qty = self._executed_quantity(order)
         if executed_qty is None:
@@ -207,6 +303,32 @@ class BinanceSpotExecutor(PaperTradingExecutor):
             raise RuntimeError("Binance order was not filled.")
         stop_loss, take_profit = self._protective_prices_from_fill(signal, fill_price)
         calculated_risk = abs(fill_price - stop_loss) * executed_qty
+        protective_order = None
+        protective_order_record_id = None
+
+        if self.place_oco_protection:
+            if take_profit is None:
+                self._emergency_close_after_unprotected_entry(signal.symbol, executed_qty)
+                raise RuntimeError("OCO protection requires take_profit.")
+            try:
+                protective_order = self._place_oco_protection(
+                    symbol=signal.symbol,
+                    quantity=executed_qty,
+                    take_profit=take_profit,
+                    stop_loss=stop_loss,
+                )
+                protective_order_record_id = self._persist_exchange_order(
+                    order=protective_order,
+                    role="protection",
+                    symbol=signal.symbol,
+                    side="SELL",
+                    order_type="OCO",
+                    requested_quantity=executed_qty,
+                    requested_price=take_profit,
+                )
+            except Exception as exc:
+                self._emergency_close_after_unprotected_entry(signal.symbol, executed_qty)
+                raise RuntimeError(f"OCO protection failed; emergency close sent: {exc}") from exc
 
         with SessionLocal() as db:
             position = PaperPosition(
@@ -227,11 +349,16 @@ class BinanceSpotExecutor(PaperTradingExecutor):
                     "exchange_order_id": self._order_id(order),
                     "exchange_status": order.get("status", "TEST_ORDER"),
                     "exchange_payload": order,
+                    "protective_order_list_id": self._order_list_id(protective_order),
+                    "protective_order_status": self._order_list_status(protective_order),
+                    "protective_order_payload": protective_order,
                 },
             )
             db.add(position)
             db.commit()
             db.refresh(position)
+            self._attach_exchange_order_to_position(entry_order_record_id, position.id)
+            self._attach_exchange_order_to_position(protective_order_record_id, position.id)
 
         result = PaperTradeResult(
             id=position.id,
@@ -245,6 +372,7 @@ class BinanceSpotExecutor(PaperTradingExecutor):
             execution_mode=self.execution_mode,
             exchange_order_id=self._order_id(order),
             exchange_status=order.get("status", "TEST_ORDER"),
+            protective_order_list_id=self._order_list_id(protective_order),
         )
         if self.audit_logger:
             self.audit_logger.record("binance_spot_trade", result.model_dump(mode="json"))
@@ -265,12 +393,38 @@ class BinanceSpotExecutor(PaperTradingExecutor):
             if position.status != "OPEN":
                 raise ValueError("Position is not open.")
             self._validate_symbol(position.symbol)
+            symbol = position.symbol
+            trade_quantity = position.quantity
+            protective_order_list_id = (position.payload or {}).get("protective_order_list_id")
+
+        if protective_order_list_id:
+            cancellation = self.client.cancel_order_list(symbol, protective_order_list_id)
+            self._persist_exchange_order(
+                order=cancellation,
+                role="protection_cancel",
+                symbol=symbol,
+                side="SELL",
+                order_type="OCO_CANCEL",
+                position_id=position_id,
+                requested_quantity=trade_quantity,
+                requested_price=exit_price,
+            )
 
         order = self._place_order_with_reconciliation(
-            symbol=position.symbol,
+            symbol=symbol,
             side="SELL",
-            quantity=position.quantity,
+            quantity=trade_quantity,
             price=exit_price,
+        )
+        self._persist_exchange_order(
+            order=order,
+            role="exit",
+            symbol=symbol,
+            side="SELL",
+            order_type=self.order_type.upper(),
+            position_id=position_id,
+            requested_quantity=trade_quantity,
+            requested_price=exit_price,
         )
         actual_exit_price = self._average_fill_price(order) or exit_price
 
@@ -301,6 +455,43 @@ class BinanceSpotExecutor(PaperTradingExecutor):
                 schema.model_dump(mode="json"),
             )
         return schema
+
+    def evaluate_open_positions(
+        self,
+        symbol: str,
+        current_price: float,
+    ) -> list[PaperPositionSchema]:
+        from sqlalchemy import select
+
+        closed: list[PaperPositionSchema] = []
+        with SessionLocal() as db:
+            positions = db.scalars(
+                select(PaperPosition).where(
+                    PaperPosition.symbol == symbol.upper(),
+                    PaperPosition.status == "OPEN",
+                )
+            ).all()
+
+        for position in positions:
+            payload = position.payload or {}
+            protective_order_list_id = payload.get("protective_order_list_id")
+            if protective_order_list_id:
+                closed_position = self._sync_oco_position(position, protective_order_list_id)
+                if closed_position:
+                    closed.append(closed_position)
+                continue
+
+            exit_reason: str | None = None
+            if position.action == "BUY":
+                if current_price <= position.stop_loss:
+                    exit_reason = "stop_loss"
+                elif position.take_profit is not None and current_price >= position.take_profit:
+                    exit_reason = "take_profit"
+
+            if exit_reason:
+                closed.append(self.close_position(position.id, current_price, exit_reason))
+
+        return closed
 
     def get_account_state(self, fallback: AccountState) -> AccountState:
         account = self.client.get_account()
@@ -353,6 +544,143 @@ class BinanceSpotExecutor(PaperTradingExecutor):
                 )
             return order
 
+    def _persist_exchange_order(
+        self,
+        order: dict | None,
+        role: str,
+        symbol: str,
+        side: str,
+        order_type: str,
+        position_id: int | None = None,
+        requested_quantity: float | None = None,
+        requested_price: float | None = None,
+    ) -> int | None:
+        if order is None:
+            return None
+
+        with SessionLocal() as db:
+            row = ExchangeOrder(
+                position_id=position_id,
+                role=role,
+                symbol=symbol.upper(),
+                side=side.upper(),
+                order_type=order_type.upper(),
+                status=self._order_status(order),
+                exchange_order_id=self._order_id(order),
+                client_order_id=self._client_order_id(order),
+                order_list_id=self._order_list_id(order),
+                quantity=requested_quantity,
+                executed_quantity=self._executed_quantity(order),
+                price=requested_price,
+                average_price=self._average_fill_price(order) or self._filled_exit_price_from_order_list(order),
+                payload=order,
+            )
+            db.add(row)
+            db.commit()
+            db.refresh(row)
+            return row.id
+
+    @staticmethod
+    def _attach_exchange_order_to_position(exchange_order_id: int | None, position_id: int) -> None:
+        if exchange_order_id is None:
+            return
+        with SessionLocal() as db:
+            row = db.get(ExchangeOrder, exchange_order_id)
+            if row is not None:
+                row.position_id = position_id
+                db.commit()
+
+    def _place_oco_protection(
+        self,
+        symbol: str,
+        quantity: float,
+        take_profit: float,
+        stop_loss: float,
+    ) -> dict:
+        stop_limit_price = stop_loss * (1 - (self.stop_limit_slippage_percent / 100))
+        return self.client.create_oco_sell_order(
+            symbol=symbol,
+            quantity=quantity,
+            take_profit_price=take_profit,
+            stop_price=stop_loss,
+            stop_limit_price=stop_limit_price,
+            test_order=self.use_test_order_endpoint,
+            list_client_order_id=self._new_client_order_id("oco"),
+        )
+
+    def _emergency_close_after_unprotected_entry(self, symbol: str, quantity: float) -> None:
+        order = self._place_order_with_reconciliation(
+            symbol=symbol,
+            side="SELL",
+            quantity=quantity,
+            price=0.0,
+        )
+        self._persist_exchange_order(
+            order=order,
+            role="emergency_exit",
+            symbol=symbol,
+            side="SELL",
+            order_type=self.order_type.upper(),
+            requested_quantity=quantity,
+        )
+        if self.audit_logger:
+            self.audit_logger.record(
+                "binance_emergency_close_unprotected_entry",
+                {"symbol": symbol, "quantity": quantity, "order": order},
+            )
+
+    def _sync_oco_position(
+        self,
+        position: PaperPosition,
+        order_list_id: str,
+    ) -> PaperPositionSchema | None:
+        order_list = self.client.get_order_list(order_list_id)
+        list_status = order_list.get("listOrderStatus") or order_list.get("listStatusType")
+
+        with SessionLocal() as db:
+            current = db.get(PaperPosition, position.id)
+            if current is not None:
+                payload = {**(current.payload or {})}
+                payload.update(
+                    {
+                        "protective_order_status": list_status,
+                        "protective_order_payload": order_list,
+                    }
+                )
+                current.payload = payload
+                db.commit()
+
+        if list_status not in {"ALL_DONE", "ALL_DONE_REJECT", "EXECUTED"}:
+            return None
+
+        fill_price = self._filled_exit_price_from_order_list(order_list)
+        if fill_price is None:
+            return None
+
+        self._persist_exchange_order(
+            order=order_list,
+            role="protection_fill",
+            symbol=position.symbol,
+            side="SELL",
+            order_type="OCO",
+            position_id=position.id,
+            requested_quantity=position.quantity,
+            requested_price=fill_price,
+        )
+        exit_reason = self._oco_exit_reason(order_list, position, fill_price)
+        schema = PaperTradingExecutor.close_position(
+            self,
+            position_id=position.id,
+            exit_price=fill_price,
+            exit_reason=exit_reason,
+        )
+        if self.audit_logger:
+            self.audit_logger.record(
+                "binance_spot_oco_position_closed",
+                schema.model_dump(mode="json"),
+            )
+        return schema
+
     def _ensure_mode_allowed(self) -> None:
         if self.execution_mode == "binance_live" and not self.real_trading_enabled:
             raise RuntimeError("Binance live trading requires REAL_TRADING_ENABLED=true.")
@@ -396,8 +724,74 @@ class BinanceSpotExecutor(PaperTradingExecutor):
 
     @staticmethod
     def _order_id(order: dict) -> str | None:
+        if not order:
+            return None
         value = order.get("orderId")
         return str(value) if value is not None else None
+
+    @staticmethod
+    def _client_order_id(order: dict) -> str | None:
+        if not order:
+            return None
+        value = order.get("clientOrderId") or order.get("listClientOrderId")
+        return str(value) if value is not None else None
+
+    @staticmethod
+    def _order_status(order: dict) -> str | None:
+        if not order:
+            return None
+        return order.get("status") or order.get("listOrderStatus") or order.get("listStatusType")
+
+    @staticmethod
+    def _order_list_id(order: dict | None) -> str | None:
+        if not order:
+            return None
+        value = order.get("orderListId")
+        return str(value) if value is not None else None
+
+    @staticmethod
+    def _order_list_status(order: dict | None) -> str | None:
+        if not order:
+            return None
+        return order.get("listOrderStatus") or order.get("listStatusType")
+
+    @staticmethod
+    def _filled_exit_price_from_order_list(order_list: dict) -> float | None:
+        reports = order_list.get("orderReports") or []
+        for report in reports:
+            if report.get("side") != "SELL":
+                continue
+            if report.get("status") != "FILLED":
+                continue
+            try:
+                executed_qty = float(report.get("executedQty") or 0)
+                quote_qty = float(report.get("cummulativeQuoteQty") or 0)
+                if executed_qty > 0 and quote_qty > 0:
+                    return quote_qty / executed_qty
+                price = float(report.get("price") or 0)
+                if price > 0:
+                    return price
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    @staticmethod
+    def _oco_exit_reason(order_list: dict, position: PaperPosition, fill_price: float) -> str:
+        reports = order_list.get("orderReports") or []
+        for report in reports:
+            if report.get("side") != "SELL" or report.get("status") != "FILLED":
+                continue
+            order_type = report.get("type")
+            if order_type in {"LIMIT_MAKER", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT"}:
+                return "take_profit"
+            if order_type in {"STOP_LOSS", "STOP_LOSS_LIMIT"}:
+                return "stop_loss"
+
+        if position.take_profit is None:
+            return "stop_loss"
+        distance_to_tp = abs(fill_price - position.take_profit)
+        distance_to_sl = abs(fill_price - position.stop_loss)
+        return "take_profit" if distance_to_tp <= distance_to_sl else "stop_loss"
 
     @staticmethod
     def _executed_quantity(order: dict) -> float | None:

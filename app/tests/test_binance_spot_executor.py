@@ -10,7 +10,15 @@ class FakeBinanceClient:
 
     def __init__(self, fill_price: float = 64200) -> None:
         self.orders: list[dict] = []
+        self.oco_orders: list[dict] = []
+        self.canceled_order_lists: list[dict] = []
         self.fill_price = fill_price
+        self.order_list: dict = {
+            "orderListId": 999,
+            "listOrderStatus": "EXEC_STARTED",
+            "listStatusType": "EXEC_STARTED",
+            "orderReports": [],
+        }
 
     def create_market_order(
         self,
@@ -71,6 +79,38 @@ class FakeBinanceClient:
     def get_account(self) -> dict:
         return {"balances": [{"asset": "USDT", "free": "2500", "locked": "0"}]}
 
+    def create_oco_sell_order(
+        self,
+        symbol: str,
+        quantity: float,
+        take_profit_price: float,
+        stop_price: float,
+        stop_limit_price: float,
+        stop_limit_time_in_force: str = "GTC",
+        test_order: bool = False,
+        list_client_order_id: str | None = None,
+    ) -> dict:
+        order = {
+            "symbol": symbol,
+            "quantity": quantity,
+            "take_profit_price": take_profit_price,
+            "stop_price": stop_price,
+            "stop_limit_price": stop_limit_price,
+            "stop_limit_time_in_force": stop_limit_time_in_force,
+            "test_order": test_order,
+            "list_client_order_id": list_client_order_id,
+        }
+        self.oco_orders.append(order)
+        return self.order_list
+
+    def cancel_order_list(self, symbol: str, order_list_id: str) -> dict:
+        cancellation = {"symbol": symbol, "order_list_id": order_list_id}
+        self.canceled_order_lists.append(cancellation)
+        return {"orderListId": order_list_id, "listOrderStatus": "ALL_DONE"}
+
+    def get_order_list(self, order_list_id: str) -> dict:
+        return self.order_list
+
 
 class UnfilledLimitBinanceClient(FakeBinanceClient):
     def create_limit_order(
@@ -111,6 +151,7 @@ def make_executor(
     execution_mode: str = "binance_testnet",
     real_trading_enabled: bool = False,
     order_type: str = "market",
+    place_oco_protection: bool = False,
 ) -> BinanceSpotExecutor:
     return BinanceSpotExecutor(
         client=client or FakeBinanceClient(),
@@ -120,6 +161,7 @@ def make_executor(
         allowed_symbols=["BTCUSDT"],
         max_notional_per_order=100,
         order_type=order_type,
+        place_oco_protection=place_oco_protection,
     )
 
 
@@ -192,3 +234,57 @@ def test_binance_executor_does_not_create_position_for_unfilled_limit_order() ->
 
     with pytest.raises(RuntimeError, match="not filled"):
         executor.execute(make_signal("BUY"))
+
+
+def test_binance_executor_places_oco_protection_after_buy_fill() -> None:
+    client = FakeBinanceClient(fill_price=77620)
+    executor = make_executor(client=client, place_oco_protection=True)
+
+    result = executor.execute(make_signal("BUY"))
+
+    assert result.protective_order_list_id == "999"
+    assert len(client.oco_orders) == 1
+    assert client.oco_orders[0]["symbol"] == "BTCUSDT"
+    assert client.oco_orders[0]["quantity"] == pytest.approx(0.001)
+    assert client.oco_orders[0]["take_profit_price"] == pytest.approx(result.take_profit)
+    assert client.oco_orders[0]["stop_price"] == pytest.approx(result.stop_loss)
+    assert client.oco_orders[0]["stop_limit_price"] < client.oco_orders[0]["stop_price"]
+
+
+def test_binance_executor_cancels_oco_before_manual_close() -> None:
+    client = FakeBinanceClient(fill_price=77620)
+    executor = make_executor(client=client, place_oco_protection=True)
+    result = executor.execute(make_signal("BUY"))
+
+    closed = executor.close_position(result.id or 0, exit_price=78000, exit_reason="manual")
+
+    assert closed.status == "CLOSED"
+    assert client.canceled_order_lists == [{"symbol": "BTCUSDT", "order_list_id": "999"}]
+    assert client.orders[-1]["side"] == "SELL"
+
+
+def test_binance_executor_syncs_position_closed_by_oco() -> None:
+    client = FakeBinanceClient(fill_price=77620)
+    executor = make_executor(client=client, place_oco_protection=True)
+    result = executor.execute(make_signal("BUY"))
+    client.order_list = {
+        "orderListId": 999,
+        "listOrderStatus": "ALL_DONE",
+        "listStatusType": "ALL_DONE",
+        "orderReports": [
+            {
+                "side": "SELL",
+                "status": "FILLED",
+                "executedQty": "0.001",
+                "cummulativeQuoteQty": "81.00529595015576",
+                "price": "81005.29595015576",
+            }
+        ],
+    }
+
+    closed = executor.evaluate_open_positions("BTCUSDT", current_price=81005.29595015576)
+    target = next(position for position in closed if position.id == result.id)
+
+    assert target.status == "CLOSED"
+    assert target.exit_reason == "take_profit"
+    assert target.exit_price == pytest.approx(81005.29595015576)

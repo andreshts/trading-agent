@@ -24,6 +24,7 @@ class PaperTradeResult(BaseModel):
     execution_mode: str = "paper"
     exchange_order_id: str | None = None
     exchange_status: str | None = None
+    protective_order_list_id: str | None = None
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -51,6 +52,8 @@ class PaperPosition(BaseModel):
     exchange_order_id: str | None = None
     exchange_status: str | None = None
     close_exchange_order_id: str | None = None
+    protective_order_list_id: str | None = None
+    protective_order_status: str | None = None
     opened_at: datetime
     closed_at: datetime | None = None
 

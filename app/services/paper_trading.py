@@ -168,6 +168,8 @@ class PaperTradingExecutor:
                 "exchange_order_id": payload.get("exchange_order_id"),
                 "exchange_status": payload.get("exchange_status"),
                 "close_exchange_order_id": payload.get("close_exchange_order_id"),
+                "protective_order_list_id": payload.get("protective_order_list_id"),
+                "protective_order_status": payload.get("protective_order_status"),
             }
         )
 

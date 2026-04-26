@@ -77,6 +77,26 @@ manual. Las señales `SELL` no abren shorts porque Binance Spot no opera shorts.
 
 `binance_live` queda bloqueado mientras `REAL_TRADING_ENABLED=false`.
 
+Para que Binance mantenga el stop loss y take profit en el exchange, activa OCO nativo:
+
+```env
+BINANCE_PLACE_OCO_PROTECTION=true
+BINANCE_STOP_LIMIT_SLIPPAGE_PERCENT=0.1
+BINANCE_USER_STREAM_ENABLED=true
+```
+
+Con OCO activo, al abrir una posicion `BUY` el backend intenta crear inmediatamente una
+orden OCO `SELL` con take profit y stop loss. Si la OCO falla despues de la compra, el
+backend envia un cierre de emergencia para no dejar una posicion local abierta sin
+proteccion. En cierre manual, primero cancela la OCO y despues envia la orden de salida.
+Cada orden de exchange queda registrada en la tabla `exchange_orders`, incluyendo
+entradas, salidas, OCO, cancelaciones y estados parciales o expirados.
+
+Con `BINANCE_USER_STREAM_ENABLED=true`, el backend abre el User Data Stream de Binance al
+arrancar. Ese stream reconcilia eventos `executionReport` y `listStatus`: actualiza la
+tabla `exchange_orders`, actualiza el estado OCO de la posicion y cierra localmente una
+posicion si Binance informa que la OCO ya ejecuto la salida.
+
 Para ejecución más restrictiva puedes usar órdenes limit inmediatas:
 
 ```env
@@ -156,6 +176,11 @@ MARKET_DATA_TIMEOUT_SECONDS=5
 MARKET_DATA_KLINE_LIMIT=100
 BINANCE_ORDER_TYPE=market
 BINANCE_LIMIT_TIME_IN_FORCE=IOC
+BINANCE_PLACE_OCO_PROTECTION=false
+BINANCE_STOP_LIMIT_SLIPPAGE_PERCENT=0.1
+BINANCE_USER_STREAM_ENABLED=false
+BINANCE_TESTNET_WS_BASE_URL=wss://testnet.binance.vision/ws
+BINANCE_LIVE_WS_BASE_URL=wss://stream.binance.com:9443/ws
 MAX_DAILY_LOSS=30
 MAX_WEEKLY_LOSS=80
 MAX_TRADES_PER_DAY=5
