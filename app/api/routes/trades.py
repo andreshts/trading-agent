@@ -12,6 +12,19 @@ from app.services.system_state import SystemStateService
 router = APIRouter()
 
 
+@router.post("/execute", response_model=PaperTradeResult)
+async def execute_trade(
+    request: PaperTradeRequest,
+    executor: PaperTradingExecutor = Depends(get_paper_executor),
+) -> PaperTradeResult:
+    try:
+        return executor.execute(request.signal, quantity=request.quantity)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.post("/paper", response_model=PaperTradeResult)
 async def execute_paper_trade(
     request: PaperTradeRequest,

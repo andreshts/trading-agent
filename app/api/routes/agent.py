@@ -2,15 +2,23 @@ from fastapi import APIRouter, Depends
 
 from app.api.deps import (
     get_ai_signal_service,
+    get_autonomous_runner,
     get_market_service,
     get_paper_executor,
     get_risk_manager,
     get_system_state,
 )
-from app.schemas.agent import AgentRunResult, AgentTickRequest, AgentTickResult
+from app.schemas.agent import (
+    AgentRunResult,
+    AgentTickRequest,
+    AgentTickResult,
+    AutonomousRunnerStatus,
+    AutonomousStartRequest,
+)
 from app.schemas.risk import RiskDecision
 from app.schemas.signal import SignalRequest, TradeSignal
 from app.services.ai_signal_service import AISignalService
+from app.services.autonomous_runner import AutonomousRunner
 from app.services.market_service import MarketService
 from app.services.paper_trading import PaperTradingExecutor
 from app.services.risk_manager import RiskManager
@@ -20,62 +28,13 @@ from app.services.system_state import SystemStateService
 router = APIRouter()
 
 
-@router.post("/signal", response_model=TradeSignal)
-async def generate_signal(
-    request: SignalRequest,
-    signal_service: AISignalService = Depends(get_ai_signal_service),
-) -> TradeSignal:
-    return await signal_service.generate_signal(request)
-
-
-@router.post("/run", response_model=AgentRunResult)
-async def run_agent(
-    request: SignalRequest,
-    signal_service: AISignalService = Depends(get_ai_signal_service),
-    risk_manager: RiskManager = Depends(get_risk_manager),
-    executor: PaperTradingExecutor = Depends(get_paper_executor),
-    system_state: SystemStateService = Depends(get_system_state),
-) -> AgentRunResult:
-    signal = await signal_service.generate_signal(request)
-    account_state = system_state.get_account_state()
-    risk_decision = risk_manager.validate_trade(signal, account_state)
-
-    if not risk_decision.approved:
-        return AgentRunResult(
-            signal=signal,
-            risk_decision=risk_decision,
-            execution_result=None,
-        )
-
-    try:
-        execution_result = executor.execute(
-            signal,
-            quantity=risk_decision.quantity,
-            risk_amount=risk_decision.risk_amount,
-        )
-        system_state.register_paper_trade()
-    except Exception as exc:
-        return AgentRunResult(
-            signal=signal,
-            risk_decision=RiskDecision(approved=False, reason=f"Execution rejected: {exc}"),
-            execution_result=None,
-        )
-
-    return AgentRunResult(
-        signal=signal,
-        risk_decision=risk_decision,
-        execution_result=execution_result,
-    )
-
-
-@router.post("/autonomous/tick", response_model=AgentTickResult)
-async def autonomous_tick(
+async def process_autonomous_tick(
     request: AgentTickRequest,
-    signal_service: AISignalService = Depends(get_ai_signal_service),
-    risk_manager: RiskManager = Depends(get_risk_manager),
-    executor: PaperTradingExecutor = Depends(get_paper_executor),
-    system_state: SystemStateService = Depends(get_system_state),
-    market_service: MarketService = Depends(get_market_service),
+    signal_service: AISignalService,
+    risk_manager: RiskManager,
+    executor: PaperTradingExecutor,
+    system_state: SystemStateService,
+    market_service: MarketService,
 ) -> AgentTickResult:
     current_price = request.current_price
     if current_price is None:
@@ -145,3 +104,127 @@ async def autonomous_tick(
         ),
         reason="Tick autónomo procesado.",
     )
+
+
+@router.post("/signal", response_model=TradeSignal)
+async def generate_signal(
+    request: SignalRequest,
+    signal_service: AISignalService = Depends(get_ai_signal_service),
+) -> TradeSignal:
+    return await signal_service.generate_signal(request)
+
+
+@router.post("/run", response_model=AgentRunResult)
+async def run_agent(
+    request: SignalRequest,
+    signal_service: AISignalService = Depends(get_ai_signal_service),
+    risk_manager: RiskManager = Depends(get_risk_manager),
+    executor: PaperTradingExecutor = Depends(get_paper_executor),
+    system_state: SystemStateService = Depends(get_system_state),
+) -> AgentRunResult:
+    signal = await signal_service.generate_signal(request)
+
+    if executor.has_open_position(signal.symbol):
+        return AgentRunResult(
+            signal=signal,
+            risk_decision=RiskDecision(
+                approved=False,
+                reason="Ya existe una posición abierta para el símbolo.",
+            ),
+            execution_result=None,
+        )
+
+    account_state = system_state.get_account_state()
+    risk_decision = risk_manager.validate_trade(signal, account_state)
+
+    if not risk_decision.approved:
+        return AgentRunResult(
+            signal=signal,
+            risk_decision=risk_decision,
+            execution_result=None,
+        )
+
+    try:
+        execution_result = executor.execute(
+            signal,
+            quantity=risk_decision.quantity,
+            risk_amount=risk_decision.risk_amount,
+        )
+        system_state.register_paper_trade()
+    except Exception as exc:
+        return AgentRunResult(
+            signal=signal,
+            risk_decision=RiskDecision(approved=False, reason=f"Execution rejected: {exc}"),
+            execution_result=None,
+        )
+
+    return AgentRunResult(
+        signal=signal,
+        risk_decision=risk_decision,
+        execution_result=execution_result,
+    )
+
+
+@router.post("/autonomous/tick", response_model=AgentTickResult)
+async def autonomous_tick(
+    request: AgentTickRequest,
+    signal_service: AISignalService = Depends(get_ai_signal_service),
+    risk_manager: RiskManager = Depends(get_risk_manager),
+    executor: PaperTradingExecutor = Depends(get_paper_executor),
+    system_state: SystemStateService = Depends(get_system_state),
+    market_service: MarketService = Depends(get_market_service),
+) -> AgentTickResult:
+    return await process_autonomous_tick(
+        request=request,
+        signal_service=signal_service,
+        risk_manager=risk_manager,
+        executor=executor,
+        system_state=system_state,
+        market_service=market_service,
+    )
+
+
+@router.post("/autonomous/start", response_model=AutonomousRunnerStatus)
+async def start_autonomous_runner(
+    request: AutonomousStartRequest,
+    runner: AutonomousRunner = Depends(get_autonomous_runner),
+    signal_service: AISignalService = Depends(get_ai_signal_service),
+    risk_manager: RiskManager = Depends(get_risk_manager),
+    executor: PaperTradingExecutor = Depends(get_paper_executor),
+    system_state: SystemStateService = Depends(get_system_state),
+    market_service: MarketService = Depends(get_market_service),
+) -> AutonomousRunnerStatus:
+    async def tick_handler(tick_request: AgentTickRequest) -> AgentTickResult:
+        return await process_autonomous_tick(
+            request=tick_request,
+            signal_service=signal_service,
+            risk_manager=risk_manager,
+            executor=executor,
+            system_state=system_state,
+            market_service=market_service,
+        )
+
+    return AutonomousRunnerStatus.model_validate(
+        runner.start(
+            symbols=request.symbols,
+            timeframe=request.timeframe,
+            market_context=request.market_context,
+            interval_seconds=request.interval_seconds,
+            open_new_position=request.open_new_position,
+            tick_handler=tick_handler,
+        )
+    )
+
+
+@router.post("/autonomous/stop", response_model=AutonomousRunnerStatus)
+async def stop_autonomous_runner(
+    runner: AutonomousRunner = Depends(get_autonomous_runner),
+) -> AutonomousRunnerStatus:
+    return AutonomousRunnerStatus.model_validate(await runner.stop())
+
+
+@router.get("/autonomous/status", response_model=AutonomousRunnerStatus)
+async def get_autonomous_runner_status(
+    runner: AutonomousRunner = Depends(get_autonomous_runner),
+) -> AutonomousRunnerStatus:
+    return AutonomousRunnerStatus.model_validate(runner.status())

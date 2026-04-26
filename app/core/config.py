@@ -22,9 +22,19 @@ class Settings(BaseSettings):
     trading_enabled: bool = True
     paper_trading_enabled: bool = True
     real_trading_enabled: bool = False
+    execution_mode: Literal["paper", "binance_testnet", "binance_live"] = "paper"
 
     market_data_provider: Literal["binance", "context"] = "binance"
     market_data_timeout_seconds: float = Field(default=5, gt=0)
+
+    binance_api_key: str = "replace_me"
+    binance_api_secret: str = "replace_me"
+    binance_testnet_base_url: str = "https://testnet.binance.vision"
+    binance_live_base_url: str = "https://api.binance.com"
+    binance_recv_window: int = Field(default=5000, gt=0, le=60000)
+    binance_use_test_order_endpoint: bool = False
+    allowed_symbols: str = "BTCUSDT,ETHUSDT"
+    max_notional_per_order: float = Field(default=100, gt=0)
 
     max_daily_loss: float = Field(default=30, ge=0)
     max_weekly_loss: float = Field(default=80, ge=0)

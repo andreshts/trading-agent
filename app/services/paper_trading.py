@@ -63,6 +63,7 @@ class PaperTradingExecutor:
             stop_loss=signal.stop_loss,
             take_profit=signal.take_profit,
             risk_amount=calculated_risk,
+            execution_mode="paper",
         )
         if self.audit_logger:
             self.audit_logger.record("paper_trade", result.model_dump(mode="json"))
@@ -97,6 +98,7 @@ class PaperTradingExecutor:
             db.refresh(position)
 
             schema = PaperPositionSchema.model_validate(position)
+            schema = self._with_payload_metadata(schema, position.payload)
 
         if self.audit_logger:
             self.audit_logger.record("paper_position_closed", schema.model_dump(mode="json"))
@@ -114,7 +116,13 @@ class PaperTradingExecutor:
             if status:
                 query = query.where(PaperPosition.status == status.upper())
             positions = db.scalars(query).all()
-            return [PaperPositionSchema.model_validate(position) for position in positions]
+            return [
+                self._with_payload_metadata(
+                    PaperPositionSchema.model_validate(position),
+                    position.payload,
+                )
+                for position in positions
+            ]
 
     @staticmethod
     def enrich_unrealized_pnl(
@@ -147,6 +155,21 @@ class PaperTradingExecutor:
                 )
             ).first()
             return position is not None
+
+    @staticmethod
+    def _with_payload_metadata(
+        position: PaperPositionSchema,
+        payload: dict | None,
+    ) -> PaperPositionSchema:
+        payload = payload or {}
+        return position.model_copy(
+            update={
+                "execution_mode": payload.get("execution_mode", "paper"),
+                "exchange_order_id": payload.get("exchange_order_id"),
+                "exchange_status": payload.get("exchange_status"),
+                "close_exchange_order_id": payload.get("close_exchange_order_id"),
+            }
+        )
 
     def evaluate_open_positions(
         self,

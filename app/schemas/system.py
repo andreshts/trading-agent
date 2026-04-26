@@ -26,9 +26,13 @@ class KillSwitchStatus(BaseModel):
 class SystemStatus(BaseModel):
     app_name: str
     app_env: str
+    execution_mode: str
     trading_enabled: bool
     paper_trading_enabled: bool
     real_trading_enabled: bool
+    exchange_configured: bool
+    allowed_symbols: list[str]
+    max_notional_per_order: float
     kill_switch: KillSwitchStatus
     audit_events: int
     account: AccountState

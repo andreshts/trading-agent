@@ -21,6 +21,9 @@ class PaperTradeResult(BaseModel):
     take_profit: float | None = None
     risk_amount: float = Field(..., ge=0)
     status: Literal["OPEN"] = "OPEN"
+    execution_mode: str = "paper"
+    exchange_order_id: str | None = None
+    exchange_status: str | None = None
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -44,6 +47,10 @@ class PaperPosition(BaseModel):
     current_price: float | None = None
     unrealized_pnl: float | None = None
     risk_amount: float
+    execution_mode: str = "paper"
+    exchange_order_id: str | None = None
+    exchange_status: str | None = None
+    close_exchange_order_id: str | None = None
     opened_at: datetime
     closed_at: datetime | None = None
 

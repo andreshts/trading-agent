@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.deps import get_audit_logger, get_kill_switch, get_system_state
 from app.core.config import Settings, get_settings
@@ -22,9 +22,20 @@ async def get_status(
     return SystemStatus(
         app_name=settings.app_name,
         app_env=settings.app_env,
+        execution_mode=settings.execution_mode,
         trading_enabled=account_state.trading_enabled and not kill_switch.is_active(),
         paper_trading_enabled=settings.paper_trading_enabled,
         real_trading_enabled=settings.real_trading_enabled,
+        exchange_configured=(
+            settings.binance_api_key != "replace_me"
+            and settings.binance_api_secret != "replace_me"
+        ),
+        allowed_symbols=[
+            symbol.strip().upper()
+            for symbol in settings.allowed_symbols.split(",")
+            if symbol.strip()
+        ],
+        max_notional_per_order=settings.max_notional_per_order,
         kill_switch=kill_switch.get_status(),
         audit_events=audit_logger.count(),
         account=account_state,
@@ -69,8 +80,17 @@ async def enable_trading(
 
 @router.post("/simulation/reset", response_model=AccountState)
 async def reset_simulation(
+    settings: Settings = Depends(get_settings),
     system_state: SystemStateService = Depends(get_system_state),
 ) -> AccountState:
+    if settings.execution_mode != "paper":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Simulation reset is only available in paper mode. "
+                "Close exchange positions before clearing local state."
+            ),
+        )
     return system_state.reset_simulation()
 
 

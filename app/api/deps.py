@@ -7,6 +7,8 @@ from app.providers.mock_provider import MockAIProvider
 from app.providers.openai_provider import OpenAIProvider
 from app.services.ai_signal_service import AISignalService
 from app.services.audit_logger import AuditLogger
+from app.services.autonomous_runner import AutonomousRunner
+from app.services.binance_spot import BinanceSpotClient, BinanceSpotExecutor
 from app.services.kill_switch import KillSwitchService
 from app.services.market_service import MarketService
 from app.services.paper_trading import PaperTradingExecutor
@@ -65,8 +67,39 @@ def get_market_service() -> MarketService:
     )
 
 
+@lru_cache
+def get_autonomous_runner() -> AutonomousRunner:
+    return AutonomousRunner(audit_logger=get_audit_logger())
+
+
 def get_paper_executor() -> PaperTradingExecutor:
     settings = get_settings()
+    if settings.execution_mode in {"binance_testnet", "binance_live"}:
+        base_url = (
+            settings.binance_testnet_base_url
+            if settings.execution_mode == "binance_testnet"
+            else settings.binance_live_base_url
+        )
+        return BinanceSpotExecutor(
+            client=BinanceSpotClient(
+                api_key=settings.binance_api_key,
+                api_secret=settings.binance_api_secret,
+                base_url=base_url,
+                recv_window=settings.binance_recv_window,
+            ),
+            execution_mode=settings.execution_mode,
+            real_trading_enabled=settings.real_trading_enabled,
+            default_order_quantity=settings.default_order_quantity,
+            allowed_symbols=[
+                symbol.strip().upper()
+                for symbol in settings.allowed_symbols.split(",")
+                if symbol.strip()
+            ],
+            max_notional_per_order=settings.max_notional_per_order,
+            use_test_order_endpoint=settings.binance_use_test_order_endpoint,
+            audit_logger=get_audit_logger(),
+        )
+
     return PaperTradingExecutor(
         paper_trading_enabled=settings.paper_trading_enabled,
         real_trading_enabled=settings.real_trading_enabled,

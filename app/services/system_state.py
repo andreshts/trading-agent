@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, time, timedelta, timezone
 
 from sqlalchemy import delete, func, select
 
@@ -150,17 +150,23 @@ class SystemStateService:
     @staticmethod
     def _count_trades_today(db) -> int:
         today = date.today()
+        day_start, day_end = SystemStateService._day_bounds(today)
         return db.scalar(
-            select(func.count(PaperPosition.id)).where(func.date(PaperPosition.opened_at) == str(today))
+            select(func.count(PaperPosition.id)).where(
+                PaperPosition.opened_at >= day_start,
+                PaperPosition.opened_at < day_end,
+            )
         ) or 0
 
     @staticmethod
     def _sum_losses_today(db, pending_pnl: float = 0) -> float:
         today = date.today()
+        day_start, day_end = SystemStateService._day_bounds(today)
         losses = db.scalars(
             select(PaperPosition.realized_pnl).where(
                 PaperPosition.status == "CLOSED",
-                func.date(PaperPosition.closed_at) == str(today),
+                PaperPosition.closed_at >= day_start,
+                PaperPosition.closed_at < day_end,
                 PaperPosition.realized_pnl < 0,
             )
         ).all()
@@ -171,12 +177,18 @@ class SystemStateService:
     def _sum_losses_this_week(db, pending_pnl: float = 0) -> float:
         today = date.today()
         week_start = today.fromordinal(today.toordinal() - today.weekday())
+        week_start_at = datetime.combine(week_start, time.min, tzinfo=timezone.utc)
         losses = db.scalars(
             select(PaperPosition.realized_pnl).where(
                 PaperPosition.status == "CLOSED",
-                func.date(PaperPosition.closed_at) >= str(week_start),
+                PaperPosition.closed_at >= week_start_at,
                 PaperPosition.realized_pnl < 0,
             )
         ).all()
         total = sum(abs(value or 0) for value in losses)
         return total + abs(pending_pnl if pending_pnl < 0 else 0)
+
+    @staticmethod
+    def _day_bounds(value: date) -> tuple[datetime, datetime]:
+        day_start = datetime.combine(value, time.min, tzinfo=timezone.utc)
+        return day_start, day_start + timedelta(days=1)
