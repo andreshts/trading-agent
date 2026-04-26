@@ -19,12 +19,9 @@ class AuditLogger:
             "payload": payload,
         }
         self._events.append(event)
-        try:
-            with SessionLocal() as db:
-                db.add(AuditEvent(event_type=event_type, payload=payload))
-                db.commit()
-        except Exception:
-            pass
+        with SessionLocal() as db:
+            db.add(AuditEvent(event_type=event_type, payload=payload))
+            db.commit()
         return event
 
     def list_events(self, limit: int = 100) -> list[dict[str, Any]]:

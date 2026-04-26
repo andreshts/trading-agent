@@ -1,6 +1,7 @@
 import pytest
 
 from app.schemas.signal import TradeSignal
+from app.schemas.system import AccountState
 from app.services.binance_spot import BinanceSpotExecutor
 
 
@@ -17,6 +18,7 @@ class FakeBinanceClient:
         side: str,
         quantity: float,
         test_order: bool = False,
+        client_order_id: str | None = None,
     ) -> dict:
         self.orders.append(
             {
@@ -24,6 +26,7 @@ class FakeBinanceClient:
                 "side": side,
                 "quantity": quantity,
                 "test_order": test_order,
+                "client_order_id": client_order_id,
             }
         )
         return {
@@ -33,6 +36,60 @@ class FakeBinanceClient:
             "executedQty": str(quantity),
             "cummulativeQuoteQty": str(quantity * self.fill_price),
             "fills": [{"price": str(self.fill_price), "qty": str(quantity), "commission": "0", "commissionAsset": "BNB"}],
+        }
+
+    def create_limit_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price: float,
+        time_in_force: str = "IOC",
+        test_order: bool = False,
+        client_order_id: str | None = None,
+    ) -> dict:
+        self.orders.append(
+            {
+                "symbol": symbol,
+                "side": side,
+                "quantity": quantity,
+                "price": price,
+                "time_in_force": time_in_force,
+                "test_order": test_order,
+                "client_order_id": client_order_id,
+            }
+        )
+        return {
+            "symbol": symbol,
+            "orderId": 456,
+            "status": "FILLED",
+            "executedQty": str(quantity),
+            "cummulativeQuoteQty": str(quantity * price),
+            "fills": [{"price": str(price), "qty": str(quantity), "commission": "0", "commissionAsset": "BNB"}],
+        }
+
+    def get_account(self) -> dict:
+        return {"balances": [{"asset": "USDT", "free": "2500", "locked": "0"}]}
+
+
+class UnfilledLimitBinanceClient(FakeBinanceClient):
+    def create_limit_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price: float,
+        time_in_force: str = "IOC",
+        test_order: bool = False,
+        client_order_id: str | None = None,
+    ) -> dict:
+        return {
+            "symbol": symbol,
+            "orderId": 789,
+            "status": "EXPIRED",
+            "executedQty": "0",
+            "cummulativeQuoteQty": "0",
+            "fills": [],
         }
 
 
@@ -53,6 +110,7 @@ def make_executor(
     client: FakeBinanceClient | None = None,
     execution_mode: str = "binance_testnet",
     real_trading_enabled: bool = False,
+    order_type: str = "market",
 ) -> BinanceSpotExecutor:
     return BinanceSpotExecutor(
         client=client or FakeBinanceClient(),
@@ -61,6 +119,7 @@ def make_executor(
         default_order_quantity=0.001,
         allowed_symbols=["BTCUSDT"],
         max_notional_per_order=100,
+        order_type=order_type,
     )
 
 
@@ -99,4 +158,37 @@ def test_binance_live_requires_real_trading_enabled() -> None:
     executor = make_executor(execution_mode="binance_live", real_trading_enabled=False)
 
     with pytest.raises(RuntimeError, match="REAL_TRADING_ENABLED=true"):
+        executor.execute(make_signal("BUY"))
+
+
+def test_binance_executor_can_place_limit_ioc_order() -> None:
+    client = FakeBinanceClient()
+    executor = make_executor(client=client, order_type="limit")
+
+    result = executor.execute(make_signal("BUY"))
+
+    assert result.exchange_order_id == "456"
+    assert client.orders[0]["price"] == 64200
+    assert client.orders[0]["time_in_force"] == "IOC"
+
+
+def test_binance_executor_uses_usdt_balance_for_account_state() -> None:
+    executor = make_executor()
+    fallback = AccountState(
+        equity=1000,
+        daily_loss=0,
+        weekly_loss=0,
+        trades_today=0,
+        trading_enabled=True,
+    )
+
+    account_state = executor.get_account_state(fallback)
+
+    assert account_state.equity == 2500
+
+
+def test_binance_executor_does_not_create_position_for_unfilled_limit_order() -> None:
+    executor = make_executor(client=UnfilledLimitBinanceClient(), order_type="limit")
+
+    with pytest.raises(RuntimeError, match="not filled"):
         executor.execute(make_signal("BUY"))

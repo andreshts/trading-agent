@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import secrets
 import time
 from urllib.parse import urlencode
 
@@ -8,6 +9,7 @@ import httpx
 from app.db.models import PaperPosition
 from app.db.session import SessionLocal
 from app.schemas.signal import TradeSignal
+from app.schemas.system import AccountState
 from app.schemas.trade import PaperPosition as PaperPositionSchema
 from app.schemas.trade import PaperTradeResult
 from app.services.audit_logger import AuditLogger
@@ -41,24 +43,62 @@ class BinanceSpotClient:
     def get_account(self) -> dict:
         return self._signed_request("GET", "/api/v3/account")
 
+    def get_order(self, symbol: str, client_order_id: str) -> dict:
+        return self._signed_request(
+            "GET",
+            "/api/v3/order",
+            {
+                "symbol": symbol.upper(),
+                "origClientOrderId": client_order_id,
+            },
+        )
+
     def create_market_order(
         self,
         symbol: str,
         side: str,
         quantity: float,
         test_order: bool = False,
+        client_order_id: str | None = None,
     ) -> dict:
         path = "/api/v3/order/test" if test_order else "/api/v3/order"
+        params = {
+            "symbol": symbol.upper(),
+            "side": side.upper(),
+            "type": "MARKET",
+            "quantity": self._format_decimal(quantity),
+            "newOrderRespType": "FULL",
+        }
+        if client_order_id:
+            params["newClientOrderId"] = client_order_id
+        return self._signed_request("POST", path, params)
+
+    def create_limit_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price: float,
+        time_in_force: str = "IOC",
+        test_order: bool = False,
+        client_order_id: str | None = None,
+    ) -> dict:
+        path = "/api/v3/order/test" if test_order else "/api/v3/order"
+        params = {
+            "symbol": symbol.upper(),
+            "side": side.upper(),
+            "type": "LIMIT",
+            "timeInForce": time_in_force.upper(),
+            "quantity": self._format_decimal(quantity),
+            "price": self._format_decimal(price),
+            "newOrderRespType": "FULL",
+        }
+        if client_order_id:
+            params["newClientOrderId"] = client_order_id
         return self._signed_request(
             "POST",
             path,
-            {
-                "symbol": symbol.upper(),
-                "side": side.upper(),
-                "type": "MARKET",
-                "quantity": self._format_decimal(quantity),
-                "newOrderRespType": "FULL",
-            },
+            params,
         )
 
     def _signed_request(
@@ -107,6 +147,8 @@ class BinanceSpotExecutor(PaperTradingExecutor):
         default_order_quantity: float,
         allowed_symbols: list[str],
         max_notional_per_order: float,
+        order_type: str = "market",
+        limit_time_in_force: str = "IOC",
         use_test_order_endpoint: bool = False,
         audit_logger: AuditLogger | None = None,
     ) -> None:
@@ -121,6 +163,8 @@ class BinanceSpotExecutor(PaperTradingExecutor):
         self.real_trading_enabled = real_trading_enabled
         self.allowed_symbols = {symbol.upper() for symbol in allowed_symbols}
         self.max_notional_per_order = max_notional_per_order
+        self.order_type = order_type.lower()
+        self.limit_time_in_force = limit_time_in_force.upper()
         self.use_test_order_endpoint = use_test_order_endpoint
 
     def execute(
@@ -147,14 +191,20 @@ class BinanceSpotExecutor(PaperTradingExecutor):
                 f"{self.max_notional_per_order:g}."
             )
 
-        order = self.client.create_market_order(
+        order = self._place_order_with_reconciliation(
             symbol=signal.symbol,
             side="BUY",
             quantity=trade_quantity,
-            test_order=self.use_test_order_endpoint,
+            price=signal.entry_price,
         )
         fill_price = self._average_fill_price(order) or signal.entry_price
-        executed_qty = self._executed_quantity(order) or trade_quantity
+        executed_qty = self._executed_quantity(order)
+        if executed_qty is None:
+            if not self.use_test_order_endpoint:
+                raise RuntimeError("Binance order response did not include executed quantity.")
+            executed_qty = trade_quantity
+        if executed_qty <= 0:
+            raise RuntimeError("Binance order was not filled.")
         stop_loss, take_profit = self._protective_prices_from_fill(signal, fill_price)
         calculated_risk = abs(fill_price - stop_loss) * executed_qty
 
@@ -216,11 +266,11 @@ class BinanceSpotExecutor(PaperTradingExecutor):
                 raise ValueError("Position is not open.")
             self._validate_symbol(position.symbol)
 
-        order = self.client.create_market_order(
+        order = self._place_order_with_reconciliation(
             symbol=position.symbol,
             side="SELL",
             quantity=position.quantity,
-            test_order=self.use_test_order_endpoint,
+            price=exit_price,
         )
         actual_exit_price = self._average_fill_price(order) or exit_price
 
@@ -252,6 +302,57 @@ class BinanceSpotExecutor(PaperTradingExecutor):
             )
         return schema
 
+    def get_account_state(self, fallback: AccountState) -> AccountState:
+        account = self.client.get_account()
+        usdt_equity = self._asset_total(account, "USDT")
+        if usdt_equity <= 0:
+            return fallback
+        peak_equity = fallback.peak_equity if fallback.peak_equity is not None else fallback.equity
+        return fallback.model_copy(update={"equity": usdt_equity, "peak_equity": max(peak_equity, usdt_equity)})
+
+    def _place_order_with_reconciliation(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price: float,
+    ) -> dict:
+        client_order_id = self._new_client_order_id(side)
+
+        try:
+            if self.order_type == "limit":
+                return self.client.create_limit_order(
+                    symbol=symbol,
+                    side=side,
+                    quantity=quantity,
+                    price=price,
+                    time_in_force=self.limit_time_in_force,
+                    test_order=self.use_test_order_endpoint,
+                    client_order_id=client_order_id,
+                )
+            return self.client.create_market_order(
+                symbol=symbol,
+                side=side,
+                quantity=quantity,
+                test_order=self.use_test_order_endpoint,
+                client_order_id=client_order_id,
+            )
+        except Exception as exc:
+            if self.use_test_order_endpoint:
+                raise
+            try:
+                order = self.client.get_order(symbol=symbol, client_order_id=client_order_id)
+            except Exception:
+                raise RuntimeError(
+                    f"Binance order request failed and reconciliation did not find order {client_order_id}: {exc}"
+                ) from exc
+            if self.audit_logger:
+                self.audit_logger.record(
+                    "binance_order_reconciled_after_error",
+                    {"symbol": symbol, "side": side, "client_order_id": client_order_id, "order": order},
+                )
+            return order
+
     def _ensure_mode_allowed(self) -> None:
         if self.execution_mode == "binance_live" and not self.real_trading_enabled:
             raise RuntimeError("Binance live trading requires REAL_TRADING_ENABLED=true.")
@@ -259,6 +360,21 @@ class BinanceSpotExecutor(PaperTradingExecutor):
     def _validate_symbol(self, symbol: str) -> None:
         if symbol.upper() not in self.allowed_symbols:
             raise ValueError(f"Symbol {symbol.upper()} is not in ALLOWED_SYMBOLS.")
+
+    @staticmethod
+    def _new_client_order_id(side: str) -> str:
+        return f"ocx-{side.lower()}-{secrets.token_hex(8)}"
+
+    @staticmethod
+    def _asset_total(account: dict, asset: str) -> float:
+        for balance in account.get("balances", []):
+            if balance.get("asset") != asset:
+                continue
+            try:
+                return float(balance.get("free") or 0) + float(balance.get("locked") or 0)
+            except (TypeError, ValueError):
+                return 0
+        return 0
 
     @staticmethod
     def _protective_prices_from_fill(signal: TradeSignal, fill_price: float) -> tuple[float, float | None]:
@@ -286,7 +402,9 @@ class BinanceSpotExecutor(PaperTradingExecutor):
     @staticmethod
     def _executed_quantity(order: dict) -> float | None:
         try:
-            return float(order.get("executedQty") or 0) or None
+            if "executedQty" not in order:
+                return None
+            return float(order.get("executedQty") or 0)
         except (TypeError, ValueError):
             return None
 

@@ -77,6 +77,18 @@ manual. Las señales `SELL` no abren shorts porque Binance Spot no opera shorts.
 
 `binance_live` queda bloqueado mientras `REAL_TRADING_ENABLED=false`.
 
+Para ejecución más restrictiva puedes usar órdenes limit inmediatas:
+
+```env
+BINANCE_ORDER_TYPE=limit
+BINANCE_LIMIT_TIME_IN_FORCE=IOC
+MAX_SIGNAL_PRICE_DEVIATION_PERCENT=0.5
+```
+
+`market` sigue siendo el modo por defecto para Testnet. `limit` envía órdenes `LIMIT IOC`,
+lo que reduce slippage pero puede no llenar si el precio se mueve. El RiskManager también
+rechaza señales cuyo `entry_price` esté demasiado lejos del precio de mercado actual.
+
 ## Contexto de mercado para IA
 
 Cuando `MARKET_DATA_PROVIDER=binance`, el backend consulta datos públicos de Binance antes
@@ -142,11 +154,14 @@ REAL_TRADING_ENABLED=false
 MARKET_DATA_PROVIDER=binance
 MARKET_DATA_TIMEOUT_SECONDS=5
 MARKET_DATA_KLINE_LIMIT=100
+BINANCE_ORDER_TYPE=market
+BINANCE_LIMIT_TIME_IN_FORCE=IOC
 MAX_DAILY_LOSS=30
 MAX_WEEKLY_LOSS=80
 MAX_TRADES_PER_DAY=5
 MAX_RISK_PER_TRADE_PERCENT=1
 MIN_CONFIDENCE=0.55
+MAX_SIGNAL_PRICE_DEVIATION_PERCENT=0.5
 DEFAULT_ORDER_QUANTITY=0.001
 KILL_SWITCH_ENABLED=true
 ```

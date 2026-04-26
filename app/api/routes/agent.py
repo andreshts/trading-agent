@@ -28,6 +28,16 @@ from app.services.system_state import SystemStateService
 router = APIRouter()
 
 
+def account_state_for_risk(
+    system_state: SystemStateService,
+    executor: PaperTradingExecutor,
+):
+    account_state = system_state.get_account_state()
+    if hasattr(executor, "get_account_state"):
+        return executor.get_account_state(account_state)
+    return account_state
+
+
 async def enrich_signal_request(
     request: SignalRequest,
     market_service: MarketService,
@@ -75,8 +85,8 @@ async def process_autonomous_tick(
 
     enriched_request = await enrich_signal_request(request, market_service)
     signal = await signal_service.generate_signal(enriched_request)
-    account_state = system_state.get_account_state()
-    risk_decision = risk_manager.validate_trade(signal, account_state)
+    account_state = account_state_for_risk(system_state, executor)
+    risk_decision = risk_manager.validate_trade(signal, account_state, market_price=current_price)
 
     if not risk_decision.approved:
         return AgentTickResult(
@@ -143,8 +153,9 @@ async def run_agent(
             execution_result=None,
         )
 
-    account_state = system_state.get_account_state()
-    risk_decision = risk_manager.validate_trade(signal, account_state)
+    market_price = await market_service.get_current_price(request.symbol, request.market_context)
+    account_state = account_state_for_risk(system_state, executor)
+    risk_decision = risk_manager.validate_trade(signal, account_state, market_price=market_price)
 
     if not risk_decision.approved:
         return AgentRunResult(

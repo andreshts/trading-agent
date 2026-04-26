@@ -30,9 +30,6 @@ class KillSwitchService:
 
     @staticmethod
     def _record(action: str, reason: str | None) -> None:
-        try:
-            with SessionLocal() as db:
-                db.add(KillSwitchEvent(action=action, reason=reason, payload={}))
-                db.commit()
-        except Exception:
-            pass
+        with SessionLocal() as db:
+            db.add(KillSwitchEvent(action=action, reason=reason, payload={}))
+            db.commit()

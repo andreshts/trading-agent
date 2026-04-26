@@ -17,6 +17,7 @@ class RiskManager:
         min_confidence: float,
         kill_switch: KillSwitchService,
         default_order_quantity: float = 0.001,
+        max_signal_price_deviation_percent: float = 0.5,
         audit_logger: AuditLogger | None = None,
     ) -> None:
         self.max_daily_loss = max_daily_loss
@@ -25,6 +26,7 @@ class RiskManager:
         self.max_risk_per_trade_percent = max_risk_per_trade_percent
         self.min_confidence = min_confidence
         self.default_order_quantity = default_order_quantity
+        self.max_signal_price_deviation_percent = max_signal_price_deviation_percent
         self.kill_switch = kill_switch
         self.audit_logger = audit_logger
 
@@ -33,9 +35,10 @@ class RiskManager:
         signal: TradeSignal,
         account_state: AccountState,
         quantity: float | None = None,
+        market_price: float | None = None,
     ) -> RiskDecision:
         trade_quantity = quantity or self.default_order_quantity
-        decision = self._validate_trade(signal, account_state, trade_quantity)
+        decision = self._validate_trade(signal, account_state, trade_quantity, market_price)
         if self.audit_logger:
             self.audit_logger.record(
                 "risk_decision",
@@ -53,6 +56,7 @@ class RiskManager:
         signal: TradeSignal,
         account_state: AccountState,
         quantity: float,
+        market_price: float | None,
     ) -> RiskDecision:
         max_risk = account_state.equity * (self.max_risk_per_trade_percent / 100)
 
@@ -88,6 +92,10 @@ class RiskManager:
         coherence_error = self._validate_price_coherence(signal)
         if coherence_error:
             return self._reject(coherence_error, max_risk, quantity)
+
+        deviation_error = self._validate_market_price_deviation(signal, market_price)
+        if deviation_error:
+            return self._reject(deviation_error, max_risk, quantity)
 
         risk_amount = self.calculate_risk_amount(signal.entry_price, signal.stop_loss, quantity)
         if risk_amount > max_risk:
@@ -130,6 +138,24 @@ class RiskManager:
 
         return None
 
+    def _validate_market_price_deviation(
+        self,
+        signal: TradeSignal,
+        market_price: float | None,
+    ) -> str | None:
+        if signal.entry_price is None or market_price is None:
+            return None
+        if market_price <= 0:
+            return None
+
+        deviation_percent = abs(signal.entry_price - market_price) / market_price * 100
+        if deviation_percent > self.max_signal_price_deviation_percent:
+            return (
+                "Precio de entrada demasiado alejado del mercado actual: "
+                f"{deviation_percent:.2f}% > {self.max_signal_price_deviation_percent:g}%"
+            )
+        return None
+
     @staticmethod
     def _reject(reason: str, max_risk: float, quantity: float) -> RiskDecision:
         return RiskDecision(
@@ -145,21 +171,18 @@ class RiskManager:
         account_state: AccountState,
         decision: RiskDecision,
     ) -> None:
-        try:
-            with SessionLocal() as db:
-                db.add(
-                    RiskDecisionLog(
-                        symbol=signal.symbol,
-                        action=signal.action,
-                        approved=decision.approved,
-                        reason=decision.reason,
-                        payload={
-                            "signal": signal.model_dump(mode="json"),
-                            "account_state": account_state.model_dump(mode="json"),
-                            "decision": decision.model_dump(mode="json"),
-                        },
-                    )
+        with SessionLocal() as db:
+            db.add(
+                RiskDecisionLog(
+                    symbol=signal.symbol,
+                    action=signal.action,
+                    approved=decision.approved,
+                    reason=decision.reason,
+                    payload={
+                        "signal": signal.model_dump(mode="json"),
+                        "account_state": account_state.model_dump(mode="json"),
+                        "decision": decision.model_dump(mode="json"),
+                    },
                 )
-                db.commit()
-        except Exception:
-            pass
+            )
+            db.commit()

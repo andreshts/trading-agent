@@ -144,3 +144,14 @@ def test_rejects_low_confidence() -> None:
 
     assert decision.approved is False
     assert decision.reason == "Confianza inferior al mínimo permitido"
+
+
+def test_rejects_entry_price_too_far_from_market_price() -> None:
+    decision = make_manager().validate_trade(
+        make_signal(entry_price=64200, stop_loss=62800, take_profit=67000),
+        make_account(),
+        market_price=65000,
+    )
+
+    assert decision.approved is False
+    assert "Precio de entrada demasiado alejado" in decision.reason

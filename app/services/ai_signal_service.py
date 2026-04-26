@@ -76,16 +76,13 @@ class AISignalService:
 
     @staticmethod
     def _persist_signal(signal: TradeSignal) -> None:
-        try:
-            with SessionLocal() as db:
-                db.add(
-                    AISignalLog(
-                        symbol=signal.symbol,
-                        action=signal.action,
-                        confidence=signal.confidence,
-                        payload=signal.model_dump(mode="json"),
-                    )
+        with SessionLocal() as db:
+            db.add(
+                AISignalLog(
+                    symbol=signal.symbol,
+                    action=signal.action,
+                    confidence=signal.confidence,
+                    payload=signal.model_dump(mode="json"),
                 )
-                db.commit()
-        except Exception:
-            pass
+            )
+            db.commit()

@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     binance_live_base_url: str = "https://api.binance.com"
     binance_recv_window: int = Field(default=5000, gt=0, le=60000)
     binance_use_test_order_endpoint: bool = False
+    binance_order_type: Literal["market", "limit"] = "market"
+    binance_limit_time_in_force: Literal["GTC", "IOC", "FOK"] = "IOC"
     allowed_symbols: str = "BTCUSDT,ETHUSDT"
     max_notional_per_order: float = Field(default=100, gt=0)
 
@@ -42,6 +44,7 @@ class Settings(BaseSettings):
     max_trades_per_day: int = Field(default=5, ge=0)
     max_risk_per_trade_percent: float = Field(default=1, gt=0)
     min_confidence: float = Field(default=0.55, ge=0, le=1)
+    max_signal_price_deviation_percent: float = Field(default=0.5, ge=0)
     default_order_quantity: float = Field(default=0.001, gt=0)
 
     kill_switch_enabled: bool = True

@@ -53,6 +53,7 @@ def get_risk_manager() -> RiskManager:
         max_trades_per_day=settings.max_trades_per_day,
         max_risk_per_trade_percent=settings.max_risk_per_trade_percent,
         min_confidence=settings.min_confidence,
+        max_signal_price_deviation_percent=settings.max_signal_price_deviation_percent,
         default_order_quantity=settings.default_order_quantity,
         kill_switch=get_kill_switch(),
         audit_logger=get_audit_logger(),
@@ -97,6 +98,8 @@ def get_paper_executor() -> PaperTradingExecutor:
                 if symbol.strip()
             ],
             max_notional_per_order=settings.max_notional_per_order,
+            order_type=settings.binance_order_type,
+            limit_time_in_force=settings.binance_limit_time_in_force,
             use_test_order_endpoint=settings.binance_use_test_order_endpoint,
             audit_logger=get_audit_logger(),
         )
