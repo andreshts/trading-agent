@@ -5,7 +5,7 @@ from app.schemas.signal import SignalRequest, TradeSignal
 from app.services.audit_logger import AuditLogger
 
 
-PROMPT_TEMPLATE = """Eres un asistente de análisis de mercado para un sistema de paper trading.
+PROMPT_TEMPLATE = """Eres un asistente de análisis de mercado para un sistema de trading automatizado.
 
 Tu tarea es analizar el contexto recibido y devolver una señal estructurada.
 
@@ -15,6 +15,8 @@ Reglas obligatorias:
 - Si no hay suficiente información, usa action = "HOLD".
 - Nunca sugieras una operación sin stop_loss.
 - Nunca inventes precios si no están en el contexto.
+- Usa los datos calculados de mercado antes que el criterio textual del usuario.
+- Si propones BUY o SELL, entry_price debe ser coherente con el precio actual.
 - Incluye una justificación breve en el campo reason.
 
 Formato esperado:

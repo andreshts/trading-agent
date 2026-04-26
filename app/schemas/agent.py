@@ -24,9 +24,9 @@ class AgentTickResult(BaseModel):
 
 class AutonomousStartRequest(BaseModel):
     symbols: list[str] = Field(default_factory=lambda: ["BTCUSDT"], min_length=1)
-    timeframe: str = "1H"
+    timeframe: str = "15M"
     market_context: str = Field(
-        default="Precio en tendencia alcista con ruptura y volumen creciente.",
+        default="Analiza el mercado con los datos calculados por el backend. Opera solo si hay ventaja clara.",
         min_length=1,
     )
     interval_seconds: float = Field(default=60, ge=5)

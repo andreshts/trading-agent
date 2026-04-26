@@ -26,7 +26,7 @@ La web usa `http://localhost:8000` como API por defecto. Si necesitas otra URL, 
 ## Ejecutar loop autónomo
 
 Con el backend levantado, este script llama periódicamente a `/agent/autonomous/tick` y deja
-que el backend obtenga el precio de mercado configurado:
+que el backend obtenga precio, velas e indicadores desde Binance:
 
 ```bash
 python scripts/autonomous_loop.py --symbols BTCUSDT,ETHUSDT --interval-seconds 60
@@ -37,6 +37,9 @@ Para probar una sola iteración:
 ```bash
 python scripts/autonomous_loop.py --symbols BTCUSDT --once
 ```
+
+Para Testnet interactivo, usa `15M` como timeframe inicial. `1H` es más lento y puede
+mantener el bot en `HOLD` durante mucho tiempo si el mercado está neutral.
 
 Tambien puedes iniciar/detener el loop desde el dashboard React con los botones
 `Iniciar automatico` y `Detener automatico`. El backend expone:
@@ -73,6 +76,28 @@ con una orden `SELL` `MARKET` cuando el loop detecta `stop_loss`, `take_profit` 
 manual. Las señales `SELL` no abren shorts porque Binance Spot no opera shorts.
 
 `binance_live` queda bloqueado mientras `REAL_TRADING_ENABLED=false`.
+
+## Contexto de mercado para IA
+
+Cuando `MARKET_DATA_PROVIDER=binance`, el backend consulta datos públicos de Binance antes
+de llamar al proveedor de IA. Cada señal recibe:
+
+- precio actual
+- velas del timeframe solicitado
+- EMA 9, EMA 21 y EMA 50
+- RSI 14
+- cambio de 1, 3 y 12 velas
+- máximo/mínimo de 20 velas
+- volumen actual, promedio de 20 velas y ratio de volumen
+
+```env
+MARKET_DATA_PROVIDER=binance
+MARKET_DATA_TIMEOUT_SECONDS=5
+MARKET_DATA_KLINE_LIMIT=100
+```
+
+Esto evita depender de texto manual en el dashboard. Si Binance no responde, el sistema
+usa el precio que pueda extraer del contexto como fallback.
 
 Endpoints principales:
 
@@ -116,6 +141,7 @@ PAPER_TRADING_ENABLED=true
 REAL_TRADING_ENABLED=false
 MARKET_DATA_PROVIDER=binance
 MARKET_DATA_TIMEOUT_SECONDS=5
+MARKET_DATA_KLINE_LIMIT=100
 MAX_DAILY_LOSS=30
 MAX_WEEKLY_LOSS=80
 MAX_TRADES_PER_DAY=5

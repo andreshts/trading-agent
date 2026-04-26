@@ -28,6 +28,18 @@ from app.services.system_state import SystemStateService
 router = APIRouter()
 
 
+async def enrich_signal_request(
+    request: SignalRequest,
+    market_service: MarketService,
+) -> SignalRequest:
+    market_context = await market_service.build_analysis_context(
+        symbol=request.symbol,
+        timeframe=request.timeframe,
+        market_context=request.market_context,
+    )
+    return request.model_copy(update={"market_context": market_context})
+
+
 async def process_autonomous_tick(
     request: AgentTickRequest,
     signal_service: AISignalService,
@@ -61,14 +73,7 @@ async def process_autonomous_tick(
             reason="Ya existe una posición abierta para el símbolo.",
         )
 
-    enriched_request = request.model_copy(
-        update={
-            "market_context": MarketService.with_current_price_context(
-                request.market_context,
-                current_price,
-            )
-        }
-    )
+    enriched_request = await enrich_signal_request(request, market_service)
     signal = await signal_service.generate_signal(enriched_request)
     account_state = system_state.get_account_state()
     risk_decision = risk_manager.validate_trade(signal, account_state)
@@ -110,8 +115,10 @@ async def process_autonomous_tick(
 async def generate_signal(
     request: SignalRequest,
     signal_service: AISignalService = Depends(get_ai_signal_service),
+    market_service: MarketService = Depends(get_market_service),
 ) -> TradeSignal:
-    return await signal_service.generate_signal(request)
+    enriched_request = await enrich_signal_request(request, market_service)
+    return await signal_service.generate_signal(enriched_request)
 
 
 @router.post("/run", response_model=AgentRunResult)
@@ -121,8 +128,10 @@ async def run_agent(
     risk_manager: RiskManager = Depends(get_risk_manager),
     executor: PaperTradingExecutor = Depends(get_paper_executor),
     system_state: SystemStateService = Depends(get_system_state),
+    market_service: MarketService = Depends(get_market_service),
 ) -> AgentRunResult:
-    signal = await signal_service.generate_signal(request)
+    enriched_request = await enrich_signal_request(request, market_service)
+    signal = await signal_service.generate_signal(enriched_request)
 
     if executor.has_open_position(signal.symbol):
         return AgentRunResult(

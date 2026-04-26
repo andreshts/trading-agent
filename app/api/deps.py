@@ -64,6 +64,7 @@ def get_market_service() -> MarketService:
     return MarketService(
         provider=settings.market_data_provider,
         timeout_seconds=settings.market_data_timeout_seconds,
+        kline_limit=settings.market_data_kline_limit,
     )
 
 

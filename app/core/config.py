@@ -26,6 +26,7 @@ class Settings(BaseSettings):
 
     market_data_provider: Literal["binance", "context"] = "binance"
     market_data_timeout_seconds: float = Field(default=5, gt=0)
+    market_data_kline_limit: int = Field(default=100, ge=30, le=500)
 
     binance_api_key: str = "replace_me"
     binance_api_secret: str = "replace_me"
