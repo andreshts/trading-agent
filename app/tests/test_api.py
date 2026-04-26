@@ -102,3 +102,18 @@ def test_simulation_reset_is_blocked_outside_paper_mode() -> None:
 
     assert response.status_code == 409
     assert "paper mode" in response.json()["detail"]
+
+
+def test_protected_routes_require_api_key_when_enabled() -> None:
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        api_auth_enabled=True,
+        api_key="secret",
+    )
+    try:
+        unauthorized = client.get("/system/status")
+        authorized = client.get("/system/status", headers={"X-API-Key": "secret"})
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+    assert unauthorized.status_code == 401
+    assert authorized.status_code == 200

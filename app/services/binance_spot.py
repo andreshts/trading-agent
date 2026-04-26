@@ -24,12 +24,16 @@ class BinanceSpotClient:
         base_url: str,
         recv_window: int = 5000,
         timeout_seconds: float = 10,
+        max_retries: int = 3,
+        retry_backoff_seconds: float = 0.5,
     ) -> None:
         self.api_key = api_key
         self.api_secret = api_secret
         self.base_url = base_url.rstrip("/")
         self.recv_window = recv_window
         self.timeout_seconds = timeout_seconds
+        self.max_retries = max_retries
+        self.retry_backoff_seconds = retry_backoff_seconds
 
     @property
     def configured(self) -> bool:
@@ -185,15 +189,7 @@ class BinanceSpotClient:
         ).hexdigest()
         signed_query = f"{query}&signature={signature}"
 
-        with httpx.Client(timeout=self.timeout_seconds) as client:
-            response = client.request(
-                method,
-                f"{self.base_url}{path}?{signed_query}",
-                headers={"X-MBX-APIKEY": self.api_key},
-            )
-            if response.status_code >= 400:
-                raise RuntimeError(f"Binance error {response.status_code}: {response.text}")
-            return response.json() if response.text else {}
+        return self._request_with_retries(method, f"{self.base_url}{path}?{signed_query}")
 
     def _api_key_request(
         self,
@@ -206,15 +202,30 @@ class BinanceSpotClient:
 
         query = urlencode(params or {})
         suffix = f"?{query}" if query else ""
-        with httpx.Client(timeout=self.timeout_seconds) as client:
-            response = client.request(
-                method,
-                f"{self.base_url}{path}{suffix}",
-                headers={"X-MBX-APIKEY": self.api_key},
-            )
-            if response.status_code >= 400:
-                raise RuntimeError(f"Binance error {response.status_code}: {response.text}")
-            return response.json() if response.text else {}
+        return self._request_with_retries(method, f"{self.base_url}{path}{suffix}")
+
+    def _request_with_retries(self, method: str, url: str) -> dict:
+        last_error: Exception | None = None
+        for attempt in range(self.max_retries + 1):
+            try:
+                with httpx.Client(timeout=self.timeout_seconds) as client:
+                    response = client.request(
+                        method,
+                        url,
+                        headers={"X-MBX-APIKEY": self.api_key},
+                    )
+                if response.status_code < 400:
+                    return response.json() if response.text else {}
+                if response.status_code not in {418, 429, 500, 502, 503, 504}:
+                    raise RuntimeError(f"Binance error {response.status_code}: {response.text}")
+                last_error = RuntimeError(f"Binance error {response.status_code}: {response.text}")
+            except httpx.HTTPError as exc:
+                last_error = exc
+
+            if attempt < self.max_retries:
+                time.sleep(self.retry_backoff_seconds * (2**attempt))
+
+        raise RuntimeError(f"Binance request failed after retries: {last_error}")
 
     @staticmethod
     def _format_decimal(value: float) -> str:

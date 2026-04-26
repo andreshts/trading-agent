@@ -21,7 +21,8 @@ npm run dev
 ```
 
 La web usa `http://localhost:8000` como API por defecto. Si necesitas otra URL, define
-`VITE_API_BASE_URL`.
+`VITE_API_BASE_URL`. Si activas autenticacion del API, define tambien `VITE_API_KEY` o
+pega la llave en el campo del dashboard.
 
 ## Ejecutar loop autónomo
 
@@ -109,6 +110,14 @@ MAX_SIGNAL_PRICE_DEVIATION_PERCENT=0.5
 lo que reduce slippage pero puede no llenar si el precio se mueve. El RiskManager también
 rechaza señales cuyo `entry_price` esté demasiado lejos del precio de mercado actual.
 
+Para manejar errores temporales del exchange, el cliente Binance reintenta 429, 418 y
+errores 5xx con backoff exponencial:
+
+```env
+BINANCE_MAX_RETRIES=3
+BINANCE_RETRY_BACKOFF_SECONDS=0.5
+```
+
 ## Contexto de mercado para IA
 
 Cuando `MARKET_DATA_PROVIDER=binance`, el backend consulta datos públicos de Binance antes
@@ -162,6 +171,8 @@ APP_NAME=Trading AI Agent
 APP_ENV=production
 DEBUG=false
 CORS_ORIGINS=https://TU-FRONTEND.up.railway.app
+API_AUTH_ENABLED=true
+API_KEY=usa_una_llave_larga_y_privada
 DATABASE_URL=${{Postgres.DATABASE_URL}}
 AI_PROVIDER=mock
 OPENAI_API_KEY=replace_me
@@ -174,6 +185,9 @@ REAL_TRADING_ENABLED=false
 MARKET_DATA_PROVIDER=binance
 MARKET_DATA_TIMEOUT_SECONDS=5
 MARKET_DATA_KLINE_LIMIT=100
+MARKET_DATA_PRICE_CACHE_TTL_SECONDS=2
+BINANCE_MAX_RETRIES=3
+BINANCE_RETRY_BACKOFF_SECONDS=0.5
 BINANCE_ORDER_TYPE=market
 BINANCE_LIMIT_TIME_IN_FORCE=IOC
 BINANCE_PLACE_OCO_PROTECTION=false
@@ -197,10 +211,15 @@ Frontend:
 
 ```env
 VITE_API_BASE_URL=https://TU-BACKEND.up.railway.app
+VITE_API_KEY=misma_llave_que_API_KEY
 ```
 
 Importante: las variables `VITE_*` se aplican al construir el frontend. Si cambias
 `VITE_API_BASE_URL`, vuelve a desplegar el servicio frontend.
+
+Nota: `VITE_API_KEY` queda embebida en el frontend; sirve para no dejar el backend abierto
+por accidente, pero no reemplaza autenticacion real con usuarios/sesiones si vas a exponer
+la app publicamente.
 
 ## Persistencia y autonomía
 

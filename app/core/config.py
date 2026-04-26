@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     app_env: str = "development"
     debug: bool = True
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    api_auth_enabled: bool = False
+    api_key: str = "replace_me"
 
     database_url: str = "sqlite:///./trading_agent.db"
 
@@ -27,12 +29,15 @@ class Settings(BaseSettings):
     market_data_provider: Literal["binance", "context"] = "binance"
     market_data_timeout_seconds: float = Field(default=5, gt=0)
     market_data_kline_limit: int = Field(default=100, ge=30, le=500)
+    market_data_price_cache_ttl_seconds: float = Field(default=2, ge=0)
 
     binance_api_key: str = "replace_me"
     binance_api_secret: str = "replace_me"
     binance_testnet_base_url: str = "https://testnet.binance.vision"
     binance_live_base_url: str = "https://api.binance.com"
     binance_recv_window: int = Field(default=5000, gt=0, le=60000)
+    binance_max_retries: int = Field(default=3, ge=0, le=10)
+    binance_retry_backoff_seconds: float = Field(default=0.5, ge=0)
     binance_use_test_order_endpoint: bool = False
     binance_order_type: Literal["market", "limit"] = "market"
     binance_limit_time_in_force: Literal["GTC", "IOC", "FOK"] = "IOC"

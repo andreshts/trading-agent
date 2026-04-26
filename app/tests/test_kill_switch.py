@@ -20,3 +20,13 @@ def test_deactivates() -> None:
     assert status.active is False
     assert status.reason is None
 
+
+def test_loads_latest_persisted_state() -> None:
+    service = KillSwitchService(enabled=True)
+    service.activate("Persisted emergency")
+
+    restored = KillSwitchService(enabled=True)
+
+    assert restored.is_active() is True
+    assert restored.get_status().reason == "Persisted emergency"
+    restored.deactivate()

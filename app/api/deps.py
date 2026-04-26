@@ -66,6 +66,7 @@ def get_market_service() -> MarketService:
         provider=settings.market_data_provider,
         timeout_seconds=settings.market_data_timeout_seconds,
         kline_limit=settings.market_data_kline_limit,
+        price_cache_ttl_seconds=settings.market_data_price_cache_ttl_seconds,
     )
 
 
@@ -88,6 +89,8 @@ def get_paper_executor() -> PaperTradingExecutor:
                 api_secret=settings.binance_api_secret,
                 base_url=base_url,
                 recv_window=settings.binance_recv_window,
+                max_retries=settings.binance_max_retries,
+                retry_backoff_seconds=settings.binance_retry_backoff_seconds,
             ),
             execution_mode=settings.execution_mode,
             real_trading_enabled=settings.real_trading_enabled,

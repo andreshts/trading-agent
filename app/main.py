@@ -1,9 +1,11 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi import Depends
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import agent, health, risk, system, trades
+from app.api.security import require_api_key
 from app.core.config import get_settings
 from app.db.session import init_db
 from app.services.audit_logger import AuditLogger
@@ -38,6 +40,8 @@ async def lifespan(app: FastAPI):
                 api_secret=settings.binance_api_secret,
                 base_url=base_url,
                 recv_window=settings.binance_recv_window,
+                max_retries=settings.binance_max_retries,
+                retry_backoff_seconds=settings.binance_retry_backoff_seconds,
             ),
             ws_base_url=ws_base_url,
             audit_logger=AuditLogger(),
@@ -62,8 +66,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+protected = [Depends(require_api_key)]
+
 app.include_router(health.router)
-app.include_router(agent.router, prefix="/agent", tags=["agent"])
-app.include_router(risk.router, prefix="/risk", tags=["risk"])
-app.include_router(trades.router, prefix="/trades", tags=["trades"])
-app.include_router(system.router, prefix="/system", tags=["system"])
+app.include_router(agent.router, prefix="/agent", tags=["agent"], dependencies=protected)
+app.include_router(risk.router, prefix="/risk", tags=["risk"], dependencies=protected)
+app.include_router(trades.router, prefix="/trades", tags=["trades"], dependencies=protected)
+app.include_router(system.router, prefix="/system", tags=["system"], dependencies=protected)

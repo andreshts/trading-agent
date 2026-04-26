@@ -1,11 +1,56 @@
+# Python
 __pycache__/
 *.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.egg-link
+pip-wheel-metadata/
+trading_ai_agent.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Testing
 .pytest_cache/
 pytest-cache-files-*/
-.venv/
-.env
+.coverage
+coverage.xml
+htmlcov/
+
+# Logs & databases
 *.log
 *.db
 *.db-*
+*.sqlite3
+
+# Docker
+postgres_data/
+
+# IDE / editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Frontend (if added later)
 frontend/node_modules/
 frontend/dist/
+

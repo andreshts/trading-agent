@@ -1,4 +1,5 @@
 import re
+import time
 from statistics import mean
 
 import httpx
@@ -10,10 +11,13 @@ class MarketService:
         provider: str = "binance",
         timeout_seconds: float = 5,
         kline_limit: int = 100,
+        price_cache_ttl_seconds: float = 2,
     ) -> None:
         self.provider = provider
         self.timeout_seconds = timeout_seconds
         self.kline_limit = kline_limit
+        self.price_cache_ttl_seconds = price_cache_ttl_seconds
+        self._price_cache: dict[str, tuple[float, float]] = {}
 
     async def get_current_price(self, symbol: str, market_context: str = "") -> float | None:
         if self.provider == "binance":
@@ -54,6 +58,10 @@ class MarketService:
         normalized_symbol = symbol.strip().upper()
         if not normalized_symbol:
             return None
+        cached = self._price_cache.get(normalized_symbol)
+        now = time.monotonic()
+        if cached and now - cached[0] <= self.price_cache_ttl_seconds:
+            return cached[1]
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
@@ -63,7 +71,9 @@ class MarketService:
                 )
                 response.raise_for_status()
                 payload = response.json()
-                return float(payload["price"])
+                price = float(payload["price"])
+                self._price_cache[normalized_symbol] = (now, price)
+                return price
         except (httpx.HTTPError, KeyError, TypeError, ValueError):
             return None
 
