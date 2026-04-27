@@ -19,6 +19,7 @@ from app.services.binance_market_stream import (
 from app.services.binance_spot import BinanceSpotClient
 from app.services.binance_user_stream import BinanceUserDataStream
 from app.services.event_bus import get_event_bus
+from app.services.notifier import get_notifier
 from app.services.reconciliation import StartupReconciliationService
 
 
@@ -66,6 +67,11 @@ async def lifespan(app: FastAPI):
     init_db()
     bus = get_event_bus()
     bus.bind_loop(asyncio.get_running_loop())
+    
+    # Start Telegram Notifier
+    notifier = get_notifier()
+    await notifier.start()
+
     price_ticker_task = asyncio.create_task(_price_ticker_loop(), name="price-ticker")
 
     market_stream: BinanceMarketDataStream | None = None
@@ -126,6 +132,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        await notifier.stop()
         price_ticker_task.cancel()
         try:
             await price_ticker_task

@@ -61,6 +61,10 @@ class Settings(BaseSettings):
 
     kill_switch_enabled: bool = True
 
+    telegram_notifications_enabled: bool = False
+    telegram_bot_token: str = "replace_me"
+    telegram_chat_id: str = "replace_me"
+
     autonomous_circuit_breaker_max_consecutive_errors: int = Field(default=5, ge=1)
     autonomous_circuit_breaker_backoff_base_seconds: float = Field(default=1.0, ge=0)
     autonomous_circuit_breaker_backoff_max_seconds: float = Field(default=60.0, ge=0)
