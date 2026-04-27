@@ -1,24 +1,67 @@
 from contextlib import asynccontextmanager
 
+import asyncio
+import logging
+
 from fastapi import FastAPI
 from fastapi import Depends
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import agent, health, risk, system, trades
+from app.api.routes import agent, health, risk, system, trades, ws
 from app.api.security import require_api_key
 from app.core.config import get_settings
 from app.db.session import init_db
 from app.services.audit_logger import AuditLogger
 from app.services.binance_spot import BinanceSpotClient
 from app.services.binance_user_stream import BinanceUserDataStream
+from app.services.event_bus import get_event_bus
 
+
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
+
+
+PRICE_TICKER_INTERVAL_SECONDS = 2.0
+
+
+async def _price_ticker_loop() -> None:
+    """Periodically push current prices for open positions while WS clients exist."""
+    bus = get_event_bus()
+    # Lazy imports to avoid touching dependencies before settings are ready.
+    from app.api.deps import get_market_service, get_paper_executor
+
+    while True:
+        try:
+            await asyncio.sleep(PRICE_TICKER_INTERVAL_SECONDS)
+            if not bus.has_subscribers():
+                continue
+            executor = get_paper_executor()
+            positions = executor.list_positions(status="OPEN", limit=200)
+            symbols = {p.symbol for p in positions}
+            if not symbols:
+                continue
+            market = get_market_service()
+            prices: dict[str, float] = {}
+            for symbol in symbols:
+                price = await market.get_current_price(symbol)
+                if price is not None:
+                    prices[symbol] = price
+            if prices:
+                bus.publish("position_prices", {"prices": prices})
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # pragma: no cover - defensive
+            logger.exception("price ticker loop error")
+            await asyncio.sleep(PRICE_TICKER_INTERVAL_SECONDS)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    bus = get_event_bus()
+    bus.bind_loop(asyncio.get_running_loop())
+    price_ticker_task = asyncio.create_task(_price_ticker_loop(), name="price-ticker")
     user_stream = None
     if settings.binance_user_stream_enabled and settings.execution_mode in {
         "binance_testnet",
@@ -51,6 +94,11 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        price_ticker_task.cancel()
+        try:
+            await price_ticker_task
+        except (asyncio.CancelledError, Exception):
+            pass
         if user_stream:
             await user_stream.stop()
 
@@ -69,6 +117,7 @@ app.add_middleware(
 protected = [Depends(require_api_key)]
 
 app.include_router(health.router)
+app.include_router(ws.router, tags=["realtime"])
 app.include_router(agent.router, prefix="/agent", tags=["agent"], dependencies=protected)
 app.include_router(risk.router, prefix="/risk", tags=["risk"], dependencies=protected)
 app.include_router(trades.router, prefix="/trades", tags=["trades"], dependencies=protected)

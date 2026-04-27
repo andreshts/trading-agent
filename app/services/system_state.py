@@ -6,6 +6,7 @@ from app.core.config import Settings
 from app.db.models import AccountSnapshot, ExchangeOrder, PaperPosition
 from app.db.session import SessionLocal, init_db
 from app.schemas.system import AccountState
+from app.services.event_bus import get_event_bus
 
 
 class SystemStateService:
@@ -40,6 +41,7 @@ class SystemStateService:
             db.add(snapshot)
             db.commit()
             db.refresh(snapshot)
+            self._publish(["status"])
             return self._to_schema(snapshot)
 
     def register_paper_trade(self) -> AccountState:
@@ -109,7 +111,15 @@ class SystemStateService:
             db.add(snapshot)
             db.commit()
             db.refresh(snapshot)
+            self._publish(["status", "positions"])
             return self._to_schema(snapshot)
+
+    @staticmethod
+    def _publish(resources: list[str]) -> None:
+        try:
+            get_event_bus().publish_resources_changed(resources)
+        except Exception:
+            pass
 
     def _latest_or_initial(self, db) -> AccountSnapshot:
         snapshot = db.scalars(

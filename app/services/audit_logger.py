@@ -5,6 +5,7 @@ from sqlalchemy import select
 
 from app.db.models import AuditEvent
 from app.db.session import SessionLocal, init_db
+from app.services.event_bus import get_event_bus
 
 
 class AuditLogger:
@@ -22,6 +23,11 @@ class AuditLogger:
         with SessionLocal() as db:
             db.add(AuditEvent(event_type=event_type, payload=payload))
             db.commit()
+        try:
+            get_event_bus().publish_audit(event)
+        except Exception:
+            # Audit must never fail because of the realtime fan-out.
+            pass
         return event
 
     def list_events(self, limit: int = 100) -> list[dict[str, Any]]:
