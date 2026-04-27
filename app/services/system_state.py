@@ -1,3 +1,4 @@
+import threading
 from datetime import date, datetime, time, timedelta, timezone
 
 from sqlalchemy import delete, func, select
@@ -13,6 +14,9 @@ class SystemStateService:
     def __init__(self, settings: Settings) -> None:
         self._trading_enabled = settings.trading_enabled
         self._initial_equity = 1000.0
+        # Serializes the read-modify-write of equity/loss counters across
+        # threads so two simultaneous closes cannot lose PnL.
+        self._write_lock = threading.RLock()
         init_db()
 
     def get_account_state(self) -> AccountState:
@@ -25,7 +29,7 @@ class SystemStateService:
             return self._to_schema(snapshot)
 
     def set_trading_enabled(self, enabled: bool) -> AccountState:
-        with SessionLocal() as db:
+        with self._write_lock, SessionLocal() as db:
             current = self._latest_or_initial(db)
             snapshot = AccountSnapshot(
                 equity=current.equity,
@@ -45,7 +49,7 @@ class SystemStateService:
             return self._to_schema(snapshot)
 
     def register_paper_trade(self) -> AccountState:
-        with SessionLocal() as db:
+        with self._write_lock, SessionLocal() as db:
             current = self._latest_or_initial(db)
             open_positions = db.scalar(
                 select(func.count(PaperPosition.id)).where(PaperPosition.status == "OPEN")
@@ -67,7 +71,7 @@ class SystemStateService:
             return self._to_schema(snapshot)
 
     def register_closed_position(self, realized_pnl: float) -> AccountState:
-        with SessionLocal() as db:
+        with self._write_lock, SessionLocal() as db:
             current = self._latest_or_initial(db)
             equity = current.equity + realized_pnl
             peak_equity = max(current.peak_equity, equity)
@@ -94,7 +98,7 @@ class SystemStateService:
             return self._to_schema(snapshot)
 
     def reset_simulation(self) -> AccountState:
-        with SessionLocal() as db:
+        with self._write_lock, SessionLocal() as db:
             db.execute(delete(ExchangeOrder))
             db.execute(delete(PaperPosition))
             snapshot = AccountSnapshot(

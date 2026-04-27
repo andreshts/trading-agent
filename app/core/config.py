@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     binance_user_stream_enabled: bool = False
     binance_testnet_ws_base_url: str = "wss://testnet.binance.vision/ws"
     binance_live_ws_base_url: str = "wss://stream.binance.com:9443/ws"
+    binance_market_stream_enabled: bool = True
+    binance_market_stream_base_url: str = "wss://stream.binance.com:9443"
     allowed_symbols: str = "BTCUSDT,ETHUSDT"
     max_notional_per_order: float = Field(default=100, gt=0)
 
@@ -59,7 +61,43 @@ class Settings(BaseSettings):
 
     kill_switch_enabled: bool = True
 
+    autonomous_circuit_breaker_max_consecutive_errors: int = Field(default=5, ge=1)
+    autonomous_circuit_breaker_backoff_base_seconds: float = Field(default=1.0, ge=0)
+    autonomous_circuit_breaker_backoff_max_seconds: float = Field(default=60.0, ge=0)
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+
+    @model_validator(mode="after")
+    def _enforce_production_invariants(self) -> "Settings":
+        is_real_mode = (
+            self.execution_mode in {"binance_testnet", "binance_live"}
+            or self.real_trading_enabled
+        )
+        if not is_real_mode:
+            return self
+
+        if self.database_url.startswith("sqlite"):
+            raise ValueError(
+                "execution_mode != paper requires a non-SQLite database_url "
+                "(use Postgres). SQLite cannot serialize concurrent writes safely."
+            )
+
+        if not self.api_auth_enabled:
+            raise ValueError(
+                "execution_mode != paper requires API_AUTH_ENABLED=true."
+            )
+
+        if not self.api_key or self.api_key == "replace_me":
+            raise ValueError(
+                "execution_mode != paper requires a non-default API_KEY."
+            )
+
+        if self.execution_mode == "binance_live" and not self.real_trading_enabled:
+            raise ValueError(
+                "execution_mode=binance_live requires REAL_TRADING_ENABLED=true."
+            )
+
+        return self
 
 
 @lru_cache

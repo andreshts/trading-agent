@@ -94,9 +94,16 @@ def test_autonomous_tick_opens_and_then_closes_position() -> None:
 
 
 def test_simulation_reset_is_blocked_outside_paper_mode() -> None:
-    app.dependency_overrides[get_settings] = lambda: Settings(execution_mode="binance_testnet")
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        execution_mode="binance_testnet",
+        database_url="postgresql+psycopg://stub:stub@localhost:5432/stub",
+        api_auth_enabled=True,
+        api_key="secret",
+    )
     try:
-        response = client.post("/system/simulation/reset")
+        response = client.post(
+            "/system/simulation/reset", headers={"X-API-Key": "secret"}
+        )
     finally:
         app.dependency_overrides.pop(get_settings, None)
 

@@ -7,6 +7,15 @@ class SignalRequest(BaseModel):
     symbol: str = Field(..., examples=["BTCUSDT"], min_length=1)
     timeframe: str = Field(..., examples=["1h"], min_length=1)
     market_context: str = Field(..., min_length=1)
+    idempotency_key: str | None = Field(
+        default=None,
+        description=(
+            "Optional caller-supplied identifier to deduplicate retries. "
+            "When provided, an order intent with this id will be reused "
+            "instead of opening a duplicate position."
+        ),
+        max_length=80,
+    )
 
     @field_validator("symbol", "timeframe")
     @classmethod

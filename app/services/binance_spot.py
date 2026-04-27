@@ -1,18 +1,20 @@
 import hashlib
 import hmac
-import secrets
 import time
+import uuid
 from urllib.parse import urlencode
 
 import httpx
+from sqlalchemy import select
 
-from app.db.models import ExchangeOrder, PaperPosition
+from app.db.models import ExchangeOrder, OrderIntent, PaperPosition
 from app.db.session import SessionLocal
 from app.schemas.signal import TradeSignal
 from app.schemas.system import AccountState
 from app.schemas.trade import PaperPosition as PaperPositionSchema
 from app.schemas.trade import PaperTradeResult
 from app.services.audit_logger import AuditLogger
+from app.services.binance_market_stream import get_market_stream
 from app.services.paper_trading import PaperTradingExecutor
 
 
@@ -69,6 +71,29 @@ class BinanceSpotClient:
                 "origClientOrderId": client_order_id,
             },
         )
+
+    def get_open_orders(self, symbol: str | None = None) -> list[dict]:
+        params: dict = {}
+        if symbol:
+            params["symbol"] = symbol.upper()
+        result = self._signed_request("GET", "/api/v3/openOrders", params)
+        if isinstance(result, list):
+            return result
+        return []
+
+    def get_my_trades(
+        self,
+        symbol: str,
+        start_time_ms: int | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        params: dict = {"symbol": symbol.upper(), "limit": limit}
+        if start_time_ms is not None:
+            params["startTime"] = start_time_ms
+        result = self._signed_request("GET", "/api/v3/myTrades", params)
+        if isinstance(result, list):
+            return result
+        return []
 
     def get_order_list(self, order_list_id: str) -> dict:
         return self._signed_request(
@@ -246,6 +271,7 @@ class BinanceSpotExecutor(PaperTradingExecutor):
         place_oco_protection: bool = False,
         stop_limit_slippage_percent: float = 0.1,
         use_test_order_endpoint: bool = False,
+        max_signal_price_deviation_percent: float = 0.5,
         audit_logger: AuditLogger | None = None,
     ) -> None:
         super().__init__(
@@ -264,12 +290,14 @@ class BinanceSpotExecutor(PaperTradingExecutor):
         self.place_oco_protection = place_oco_protection
         self.stop_limit_slippage_percent = stop_limit_slippage_percent
         self.use_test_order_endpoint = use_test_order_endpoint
+        self.max_signal_price_deviation_percent = max_signal_price_deviation_percent
 
     def execute(
         self,
         signal: TradeSignal,
         quantity: float | None = None,
         risk_amount: float | None = None,
+        intent_id: str | None = None,
     ) -> PaperTradeResult:
         self._ensure_mode_allowed()
         self._validate_symbol(signal.symbol)
@@ -289,11 +317,20 @@ class BinanceSpotExecutor(PaperTradingExecutor):
                 f"{self.max_notional_per_order:g}."
             )
 
+        entry_intent_id = intent_id or self._new_intent_id("entry")
+        existing = self._existing_position_for_intent(entry_intent_id)
+        if existing is not None:
+            return existing
+
+        self._reject_if_market_moved_against_signal(signal)
+
         order = self._place_order_with_reconciliation(
             symbol=signal.symbol,
             side="BUY",
             quantity=trade_quantity,
             price=signal.entry_price,
+            intent_id=entry_intent_id,
+            role="entry",
         )
         entry_order_record_id = self._persist_exchange_order(
             order=order,
@@ -327,6 +364,7 @@ class BinanceSpotExecutor(PaperTradingExecutor):
                     quantity=executed_qty,
                     take_profit=take_profit,
                     stop_loss=stop_loss,
+                    intent_id=f"{entry_intent_id}-oco",
                 )
                 protective_order_record_id = self._persist_exchange_order(
                     order=protective_order,
@@ -370,6 +408,7 @@ class BinanceSpotExecutor(PaperTradingExecutor):
             db.refresh(position)
             self._attach_exchange_order_to_position(entry_order_record_id, position.id)
             self._attach_exchange_order_to_position(protective_order_record_id, position.id)
+            self._attach_intent_to_position(entry_intent_id, position.id)
 
         result = PaperTradeResult(
             id=position.id,
@@ -394,6 +433,7 @@ class BinanceSpotExecutor(PaperTradingExecutor):
         position_id: int,
         exit_price: float,
         exit_reason: str = "manual",
+        intent_id: str | None = None,
     ) -> PaperPositionSchema:
         self._ensure_mode_allowed()
 
@@ -421,11 +461,14 @@ class BinanceSpotExecutor(PaperTradingExecutor):
                 requested_price=exit_price,
             )
 
+        exit_intent_id = intent_id or self._new_intent_id(f"exit-{position_id}")
         order = self._place_order_with_reconciliation(
             symbol=symbol,
             side="SELL",
             quantity=trade_quantity,
             price=exit_price,
+            intent_id=exit_intent_id,
+            role="exit",
         )
         self._persist_exchange_order(
             order=order,
@@ -518,12 +561,54 @@ class BinanceSpotExecutor(PaperTradingExecutor):
         side: str,
         quantity: float,
         price: float,
+        intent_id: str | None = None,
+        role: str = "entry",
     ) -> dict:
-        client_order_id = self._new_client_order_id(side)
+        intent_id = intent_id or self._new_intent_id(role)
+        client_order_id = self._derive_client_order_id(intent_id, side)
+
+        intent = self._get_or_create_intent(
+            intent_id=intent_id,
+            client_order_id=client_order_id,
+            symbol=symbol,
+            side=side,
+            role=role,
+            order_type=self.order_type.upper(),
+            quantity=quantity,
+            requested_price=price,
+        )
+
+        if intent.status == "FILLED" and intent.payload:
+            if self.audit_logger:
+                self.audit_logger.record(
+                    "binance_intent_replayed",
+                    {"intent_id": intent_id, "client_order_id": client_order_id},
+                )
+            return intent.payload
+
+        if intent.status in {"PENDING", "ACK"} and not self.use_test_order_endpoint:
+            try:
+                existing_order = self.client.get_order(
+                    symbol=symbol, client_order_id=client_order_id
+                )
+            except Exception:
+                existing_order = None
+            if existing_order:
+                self._mark_intent_filled(intent_id, existing_order)
+                if self.audit_logger:
+                    self.audit_logger.record(
+                        "binance_intent_recovered_pre_send",
+                        {
+                            "intent_id": intent_id,
+                            "client_order_id": client_order_id,
+                            "order": existing_order,
+                        },
+                    )
+                return existing_order
 
         try:
             if self.order_type == "limit":
-                return self.client.create_limit_order(
+                order = self.client.create_limit_order(
                     symbol=symbol,
                     side=side,
                     quantity=quantity,
@@ -532,22 +617,28 @@ class BinanceSpotExecutor(PaperTradingExecutor):
                     test_order=self.use_test_order_endpoint,
                     client_order_id=client_order_id,
                 )
-            return self.client.create_market_order(
-                symbol=symbol,
-                side=side,
-                quantity=quantity,
-                test_order=self.use_test_order_endpoint,
-                client_order_id=client_order_id,
-            )
+            else:
+                order = self.client.create_market_order(
+                    symbol=symbol,
+                    side=side,
+                    quantity=quantity,
+                    test_order=self.use_test_order_endpoint,
+                    client_order_id=client_order_id,
+                )
+            self._mark_intent_filled(intent_id, order)
+            return order
         except Exception as exc:
             if self.use_test_order_endpoint:
+                self._mark_intent_rejected(intent_id, str(exc))
                 raise
             try:
                 order = self.client.get_order(symbol=symbol, client_order_id=client_order_id)
             except Exception:
+                self._mark_intent_rejected(intent_id, str(exc))
                 raise RuntimeError(
                     f"Binance order request failed and reconciliation did not find order {client_order_id}: {exc}"
                 ) from exc
+            self._mark_intent_filled(intent_id, order)
             if self.audit_logger:
                 self.audit_logger.record(
                     "binance_order_reconciled_after_error",
@@ -607,8 +698,11 @@ class BinanceSpotExecutor(PaperTradingExecutor):
         quantity: float,
         take_profit: float,
         stop_loss: float,
+        intent_id: str | None = None,
     ) -> dict:
         stop_limit_price = stop_loss * (1 - (self.stop_limit_slippage_percent / 100))
+        oco_intent_id = intent_id or self._new_intent_id("oco")
+        list_client_order_id = self._derive_client_order_id(oco_intent_id, "OCO")
         return self.client.create_oco_sell_order(
             symbol=symbol,
             quantity=quantity,
@@ -616,7 +710,7 @@ class BinanceSpotExecutor(PaperTradingExecutor):
             stop_price=stop_loss,
             stop_limit_price=stop_limit_price,
             test_order=self.use_test_order_endpoint,
-            list_client_order_id=self._new_client_order_id("oco"),
+            list_client_order_id=list_client_order_id,
         )
 
     def _emergency_close_after_unprotected_entry(self, symbol: str, quantity: float) -> None:
@@ -700,9 +794,141 @@ class BinanceSpotExecutor(PaperTradingExecutor):
         if symbol.upper() not in self.allowed_symbols:
             raise ValueError(f"Symbol {symbol.upper()} is not in ALLOWED_SYMBOLS.")
 
+    def _reject_if_market_moved_against_signal(self, signal: TradeSignal) -> None:
+        if signal.entry_price is None:
+            return
+        stream = get_market_stream()
+        if stream is None:
+            return
+        # For BUY we care about the ask we'd actually cross. Fall back to
+        # last_price if we don't have a fresh book.
+        reference = stream.get_ask(signal.symbol, max_age_seconds=5.0)
+        if reference is None:
+            reference = stream.get_last_price(signal.symbol, max_age_seconds=5.0)
+        if reference is None:
+            return
+        deviation = abs(signal.entry_price - reference) / reference * 100
+        if deviation <= self.max_signal_price_deviation_percent:
+            return
+        if self.audit_logger:
+            self.audit_logger.record(
+                "binance_pre_post_price_drift_rejected",
+                {
+                    "symbol": signal.symbol,
+                    "signal_entry_price": signal.entry_price,
+                    "live_reference_price": reference,
+                    "deviation_percent": deviation,
+                    "max_allowed_percent": self.max_signal_price_deviation_percent,
+                },
+            )
+        raise RuntimeError(
+            "Pre-POST price re-check rejected: live price drifted "
+            f"{deviation:.2f}% > {self.max_signal_price_deviation_percent:g}% "
+            f"(signal {signal.entry_price:g} vs market {reference:g})."
+        )
+
     @staticmethod
-    def _new_client_order_id(side: str) -> str:
-        return f"ocx-{side.lower()}-{secrets.token_hex(8)}"
+    def _new_intent_id(role: str) -> str:
+        return f"{role}-{uuid.uuid4().hex}"
+
+    @staticmethod
+    def _derive_client_order_id(intent_id: str, side: str) -> str:
+        digest = hashlib.sha256(f"{intent_id}|{side.upper()}".encode("utf-8")).hexdigest()[:20]
+        return f"ocx-{side.lower()[:1]}-{digest}"
+
+    def _existing_position_for_intent(self, intent_id: str) -> PaperTradeResult | None:
+        with SessionLocal() as db:
+            intent = db.scalars(
+                select(OrderIntent).where(OrderIntent.intent_id == intent_id)
+            ).first()
+            if intent is None or intent.position_id is None:
+                return None
+            position = db.get(PaperPosition, intent.position_id)
+            if position is None:
+                return None
+            payload = position.payload or {}
+            return PaperTradeResult(
+                id=position.id,
+                symbol=position.symbol,
+                action=position.action,
+                quantity=position.quantity,
+                entry_price=position.entry_price,
+                stop_loss=position.stop_loss,
+                take_profit=position.take_profit,
+                risk_amount=position.risk_amount,
+                execution_mode=payload.get("execution_mode", self.execution_mode),
+                exchange_order_id=payload.get("exchange_order_id"),
+                exchange_status=payload.get("exchange_status"),
+                protective_order_list_id=payload.get("protective_order_list_id"),
+            )
+
+    def _get_or_create_intent(
+        self,
+        intent_id: str,
+        client_order_id: str,
+        symbol: str,
+        side: str,
+        role: str,
+        order_type: str,
+        quantity: float,
+        requested_price: float | None,
+    ) -> OrderIntent:
+        with SessionLocal() as db:
+            intent = db.scalars(
+                select(OrderIntent).where(OrderIntent.intent_id == intent_id)
+            ).first()
+            if intent is not None:
+                return intent
+            intent = OrderIntent(
+                intent_id=intent_id,
+                client_order_id=client_order_id,
+                symbol=symbol.upper(),
+                side=side.upper(),
+                role=role,
+                order_type=order_type.upper(),
+                quantity=quantity,
+                requested_price=requested_price,
+                status="PENDING",
+                payload={},
+            )
+            db.add(intent)
+            db.commit()
+            db.refresh(intent)
+            return intent
+
+    def _mark_intent_filled(self, intent_id: str, order: dict) -> None:
+        with SessionLocal() as db:
+            intent = db.scalars(
+                select(OrderIntent).where(OrderIntent.intent_id == intent_id)
+            ).first()
+            if intent is None:
+                return
+            intent.status = "FILLED"
+            intent.exchange_order_id = self._order_id(order) or intent.exchange_order_id
+            intent.payload = order
+            db.commit()
+
+    def _mark_intent_rejected(self, intent_id: str, error: str) -> None:
+        with SessionLocal() as db:
+            intent = db.scalars(
+                select(OrderIntent).where(OrderIntent.intent_id == intent_id)
+            ).first()
+            if intent is None:
+                return
+            intent.status = "REJECTED"
+            intent.payload = {**(intent.payload or {}), "error": error}
+            db.commit()
+
+    @staticmethod
+    def _attach_intent_to_position(intent_id: str, position_id: int) -> None:
+        with SessionLocal() as db:
+            intent = db.scalars(
+                select(OrderIntent).where(OrderIntent.intent_id == intent_id)
+            ).first()
+            if intent is None:
+                return
+            intent.position_id = position_id
+            db.commit()
 
     @staticmethod
     def _asset_total(account: dict, asset: str) -> float:

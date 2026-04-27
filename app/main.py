@@ -12,9 +12,14 @@ from app.api.security import require_api_key
 from app.core.config import get_settings
 from app.db.session import init_db
 from app.services.audit_logger import AuditLogger
+from app.services.binance_market_stream import (
+    BinanceMarketDataStream,
+    set_market_stream,
+)
 from app.services.binance_spot import BinanceSpotClient
 from app.services.binance_user_stream import BinanceUserDataStream
 from app.services.event_bus import get_event_bus
+from app.services.reconciliation import StartupReconciliationService
 
 
 logger = logging.getLogger(__name__)
@@ -62,11 +67,26 @@ async def lifespan(app: FastAPI):
     bus = get_event_bus()
     bus.bind_loop(asyncio.get_running_loop())
     price_ticker_task = asyncio.create_task(_price_ticker_loop(), name="price-ticker")
+
+    market_stream: BinanceMarketDataStream | None = None
+    allowed_symbols = [
+        s.strip().upper() for s in settings.allowed_symbols.split(",") if s.strip()
+    ]
+    if (
+        settings.binance_market_stream_enabled
+        and settings.market_data_provider == "binance"
+        and allowed_symbols
+    ):
+        market_stream = BinanceMarketDataStream(
+            symbols=allowed_symbols,
+            ws_base_url=settings.binance_market_stream_base_url,
+        )
+        set_market_stream(market_stream)
+        await market_stream.start()
+        app.state.binance_market_stream = market_stream
+
     user_stream = None
-    if settings.binance_user_stream_enabled and settings.execution_mode in {
-        "binance_testnet",
-        "binance_live",
-    }:
+    if settings.execution_mode in {"binance_testnet", "binance_live"}:
         base_url = (
             settings.binance_testnet_base_url
             if settings.execution_mode == "binance_testnet"
@@ -77,20 +97,32 @@ async def lifespan(app: FastAPI):
             if settings.execution_mode == "binance_testnet"
             else settings.binance_live_ws_base_url
         )
-        user_stream = BinanceUserDataStream(
-            client=BinanceSpotClient(
-                api_key=settings.binance_api_key,
-                api_secret=settings.binance_api_secret,
-                base_url=base_url,
-                recv_window=settings.binance_recv_window,
-                max_retries=settings.binance_max_retries,
-                retry_backoff_seconds=settings.binance_retry_backoff_seconds,
-            ),
-            ws_base_url=ws_base_url,
-            audit_logger=AuditLogger(),
+        reconciliation_client = BinanceSpotClient(
+            api_key=settings.binance_api_key,
+            api_secret=settings.binance_api_secret,
+            base_url=base_url,
+            recv_window=settings.binance_recv_window,
+            max_retries=settings.binance_max_retries,
+            retry_backoff_seconds=settings.binance_retry_backoff_seconds,
         )
-        await user_stream.start()
-        app.state.binance_user_stream = user_stream
+        try:
+            report = await StartupReconciliationService(
+                client=reconciliation_client,
+                allowed_symbols=allowed_symbols,
+                audit_logger=AuditLogger(),
+            ).run()
+            logger.info("startup reconciliation report: %s", report)
+        except Exception:
+            logger.exception("startup reconciliation failed")
+
+        if settings.binance_user_stream_enabled:
+            user_stream = BinanceUserDataStream(
+                client=reconciliation_client,
+                ws_base_url=ws_base_url,
+                audit_logger=AuditLogger(),
+            )
+            await user_stream.start()
+            app.state.binance_user_stream = user_stream
     try:
         yield
     finally:
@@ -101,6 +133,9 @@ async def lifespan(app: FastAPI):
             pass
         if user_stream:
             await user_stream.stop()
+        if market_stream:
+            await market_stream.stop()
+            set_market_stream(None)
 
 
 app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)

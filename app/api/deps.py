@@ -72,7 +72,14 @@ def get_market_service() -> MarketService:
 
 @lru_cache
 def get_autonomous_runner() -> AutonomousRunner:
-    return AutonomousRunner(audit_logger=get_audit_logger())
+    settings = get_settings()
+    return AutonomousRunner(
+        audit_logger=get_audit_logger(),
+        kill_switch=get_kill_switch(),
+        max_consecutive_errors=settings.autonomous_circuit_breaker_max_consecutive_errors,
+        backoff_base_seconds=settings.autonomous_circuit_breaker_backoff_base_seconds,
+        backoff_max_seconds=settings.autonomous_circuit_breaker_backoff_max_seconds,
+    )
 
 
 def get_paper_executor() -> PaperTradingExecutor:
@@ -106,6 +113,7 @@ def get_paper_executor() -> PaperTradingExecutor:
             place_oco_protection=settings.binance_place_oco_protection,
             stop_limit_slippage_percent=settings.binance_stop_limit_slippage_percent,
             use_test_order_endpoint=settings.binance_use_test_order_endpoint,
+            max_signal_price_deviation_percent=settings.max_signal_price_deviation_percent,
             audit_logger=get_audit_logger(),
         )
 

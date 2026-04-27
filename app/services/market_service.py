@@ -4,6 +4,8 @@ from statistics import mean
 
 import httpx
 
+from app.services.binance_market_stream import get_market_stream
+
 
 class MarketService:
     def __init__(
@@ -21,11 +23,29 @@ class MarketService:
 
     async def get_current_price(self, symbol: str, market_context: str = "") -> float | None:
         if self.provider == "binance":
+            stream_price = self._get_stream_price(symbol)
+            if stream_price is not None:
+                return stream_price
             price = await self._get_binance_price(symbol)
             if price is not None:
                 return price
 
         return self.extract_current_price(market_context)
+
+    def get_book_ticker(self, symbol: str) -> tuple[float | None, float | None]:
+        stream = get_market_stream()
+        if stream is None:
+            return None, None
+        return stream.get_bid(symbol), stream.get_ask(symbol)
+
+    @staticmethod
+    def _get_stream_price(symbol: str) -> float | None:
+        stream = get_market_stream()
+        if stream is None:
+            return None
+        # 5s freshness window: if the stream went silent we let REST take over
+        # rather than serve a stale price for risk decisions.
+        return stream.get_last_price(symbol, max_age_seconds=5.0)
 
     async def build_analysis_context(
         self,

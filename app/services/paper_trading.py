@@ -25,6 +25,7 @@ class PaperTradingExecutor:
         signal: TradeSignal,
         quantity: float | None = None,
         risk_amount: float | None = None,
+        intent_id: str | None = None,
     ) -> PaperTradeResult:
         if self.real_trading_enabled:
             raise RuntimeError("Real trading is disabled by design in this server.")
@@ -74,6 +75,7 @@ class PaperTradingExecutor:
         position_id: int,
         exit_price: float,
         exit_reason: str = "manual",
+        intent_id: str | None = None,
     ) -> PaperPositionSchema:
         with SessionLocal() as db:
             position = db.get(PaperPosition, position_id)

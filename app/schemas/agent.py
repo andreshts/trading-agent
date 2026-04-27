@@ -42,3 +42,6 @@ class AutonomousRunnerStatus(BaseModel):
     last_tick_at: str | None = None
     last_results: dict = Field(default_factory=dict)
     last_error: str | None = None
+    consecutive_errors: int = 0
+    circuit_breaker_tripped: bool = False
+    circuit_breaker_reason: str | None = None
