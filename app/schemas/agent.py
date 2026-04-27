@@ -31,6 +31,7 @@ class AutonomousStartRequest(BaseModel):
     )
     interval_seconds: float = Field(default=60, ge=5)
     open_new_position: bool = True
+    align_to_candle_close: bool = True
 
 
 class AutonomousRunnerStatus(BaseModel):
@@ -39,6 +40,7 @@ class AutonomousRunnerStatus(BaseModel):
     timeframe: str
     interval_seconds: float
     open_new_position: bool
+    align_to_candle_close: bool = False
     last_tick_at: str | None = None
     last_results: dict = Field(default_factory=dict)
     last_error: str | None = None

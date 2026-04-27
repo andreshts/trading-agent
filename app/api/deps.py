@@ -37,7 +37,13 @@ def get_ai_provider(settings: Settings | None = None) -> AIProvider:
     if settings.ai_provider == "openai":
         return OpenAIProvider(api_key=settings.openai_api_key, model=settings.openai_model)
     if settings.ai_provider == "gemini":
-        return GeminiProvider(api_key=settings.gemini_api_key, model=settings.gemini_model)
+        return GeminiProvider(
+            api_key=settings.gemini_api_key,
+            model=settings.gemini_model,
+            temperature=settings.gemini_temperature,
+            top_p=settings.gemini_top_p,
+            max_output_tokens=settings.gemini_max_output_tokens,
+        )
     return MockAIProvider()
 
 
@@ -55,6 +61,9 @@ def get_risk_manager() -> RiskManager:
         min_confidence=settings.min_confidence,
         max_signal_price_deviation_percent=settings.max_signal_price_deviation_percent,
         default_order_quantity=settings.default_order_quantity,
+        taker_fee_percent=settings.taker_fee_percent,
+        slippage_assumption_percent=settings.slippage_assumption_percent,
+        min_reward_to_risk_ratio=settings.min_reward_to_risk_ratio,
         kill_switch=get_kill_switch(),
         audit_logger=get_audit_logger(),
     )
@@ -121,5 +130,7 @@ def get_paper_executor() -> PaperTradingExecutor:
         paper_trading_enabled=settings.paper_trading_enabled,
         real_trading_enabled=settings.real_trading_enabled,
         default_order_quantity=settings.default_order_quantity,
+        taker_fee_percent=settings.taker_fee_percent,
+        slippage_assumption_percent=settings.slippage_assumption_percent,
         audit_logger=get_audit_logger(),
     )

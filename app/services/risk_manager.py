@@ -18,6 +18,9 @@ class RiskManager:
         kill_switch: KillSwitchService,
         default_order_quantity: float = 0.001,
         max_signal_price_deviation_percent: float = 0.5,
+        taker_fee_percent: float = 0.1,
+        slippage_assumption_percent: float = 0.05,
+        min_reward_to_risk_ratio: float = 1.5,
         audit_logger: AuditLogger | None = None,
     ) -> None:
         self.max_daily_loss = max_daily_loss
@@ -27,8 +30,24 @@ class RiskManager:
         self.min_confidence = min_confidence
         self.default_order_quantity = default_order_quantity
         self.max_signal_price_deviation_percent = max_signal_price_deviation_percent
+        self.taker_fee_percent = taker_fee_percent
+        self.slippage_assumption_percent = slippage_assumption_percent
+        self.min_reward_to_risk_ratio = min_reward_to_risk_ratio
         self.kill_switch = kill_switch
         self.audit_logger = audit_logger
+
+    def pre_signal_skip_reason(self, account_state: AccountState) -> str | None:
+        if self.kill_switch.is_active():
+            return "Kill switch activo"
+        if not account_state.trading_enabled:
+            return "Trading deshabilitado"
+        if account_state.daily_loss >= self.max_daily_loss:
+            return "Límite de pérdida diaria alcanzado"
+        if account_state.weekly_loss >= self.max_weekly_loss:
+            return "Límite de pérdida semanal alcanzado"
+        if account_state.trades_today >= self.max_trades_per_day:
+            return "Máximo de operaciones diarias alcanzado"
+        return None
 
     def validate_trade(
         self,
@@ -97,7 +116,13 @@ class RiskManager:
         if deviation_error:
             return self._reject(deviation_error, max_risk, quantity)
 
-        risk_amount = self.calculate_risk_amount(signal.entry_price, signal.stop_loss, quantity)
+        rr_error = self._validate_reward_to_risk(signal, quantity)
+        if rr_error:
+            return self._reject(rr_error, max_risk, quantity)
+
+        risk_amount = self.calculate_risk_amount(
+            signal.entry_price, signal.stop_loss, quantity
+        )
         if risk_amount > max_risk:
             return RiskDecision(
                 approved=False,
@@ -115,9 +140,62 @@ class RiskManager:
             quantity=quantity,
         )
 
-    @staticmethod
-    def calculate_risk_amount(entry_price: float, stop_loss: float, quantity: float) -> float:
-        return abs(entry_price - stop_loss) * quantity
+    def calculate_risk_amount(
+        self,
+        entry_price: float,
+        stop_loss: float,
+        quantity: float,
+    ) -> float:
+        """Worst-case loss including round-trip fees and slippage on both legs."""
+        price_risk = abs(entry_price - stop_loss) * quantity
+        fee_cost = self._round_trip_fee_cost(entry_price, stop_loss, quantity)
+        slippage_cost = self._round_trip_slippage_cost(entry_price, stop_loss, quantity)
+        return price_risk + fee_cost + slippage_cost
+
+    def _round_trip_fee_cost(
+        self, entry_price: float, exit_price: float, quantity: float
+    ) -> float:
+        fee_rate = self.taker_fee_percent / 100
+        return (entry_price + exit_price) * quantity * fee_rate
+
+    def _round_trip_slippage_cost(
+        self, entry_price: float, exit_price: float, quantity: float
+    ) -> float:
+        slip_rate = self.slippage_assumption_percent / 100
+        return (entry_price + exit_price) * quantity * slip_rate
+
+    def _validate_reward_to_risk(
+        self, signal: TradeSignal, quantity: float
+    ) -> str | None:
+        if self.min_reward_to_risk_ratio <= 0:
+            return None
+        if signal.take_profit is None or signal.entry_price is None or signal.stop_loss is None:
+            return None
+
+        net_risk = self.calculate_risk_amount(signal.entry_price, signal.stop_loss, quantity)
+        if net_risk <= 0:
+            return None
+
+        gross_reward = abs(signal.take_profit - signal.entry_price) * quantity
+        # Reward also pays exit fees + slippage at the take-profit price.
+        reward_fees = self._round_trip_fee_cost(
+            signal.entry_price, signal.take_profit, quantity
+        )
+        reward_slippage = self._round_trip_slippage_cost(
+            signal.entry_price, signal.take_profit, quantity
+        )
+        net_reward = gross_reward - reward_fees - reward_slippage
+        if net_reward <= 0:
+            return (
+                "R:R inválido tras costes: el take_profit no cubre comisiones y slippage"
+            )
+
+        ratio = net_reward / net_risk
+        if ratio < self.min_reward_to_risk_ratio:
+            return (
+                f"R:R neto {ratio:.2f} inferior al mínimo {self.min_reward_to_risk_ratio:g}"
+            )
+        return None
 
     @staticmethod
     def _validate_price_coherence(signal: TradeSignal) -> str | None:

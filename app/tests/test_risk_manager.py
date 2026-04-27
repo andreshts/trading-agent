@@ -15,6 +15,11 @@ def make_manager(kill_switch: KillSwitchService | None = None) -> RiskManager:
         min_confidence=0.55,
         kill_switch=kill_switch or KillSwitchService(enabled=True),
         default_order_quantity=0.001,
+        # These tests target the core rule set. Cost-aware tests live in
+        # test_fees_and_slippage.py with realistic fees enabled.
+        taker_fee_percent=0,
+        slippage_assumption_percent=0,
+        min_reward_to_risk_ratio=0,
     )
 
 

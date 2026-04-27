@@ -19,7 +19,10 @@ class Settings(BaseSettings):
     openai_api_key: str = "replace_me"
     openai_model: str = "gpt-4.1-mini"
     gemini_api_key: str = "replace_me"
-    gemini_model: str = "gemini-1.5-pro"
+    gemini_model: str = "gemini-2.5-flash"
+    gemini_temperature: float = Field(default=0.1, ge=0, le=2)
+    gemini_top_p: float = Field(default=0.9, ge=0, le=1)
+    gemini_max_output_tokens: int = Field(default=512, ge=64, le=8192)
 
     trading_enabled: bool = True
     paper_trading_enabled: bool = True
@@ -58,6 +61,14 @@ class Settings(BaseSettings):
     min_confidence: float = Field(default=0.55, ge=0, le=1)
     max_signal_price_deviation_percent: float = Field(default=0.5, ge=0)
     default_order_quantity: float = Field(default=0.001, gt=0)
+
+    # Cost modeling. Defaults reflect Binance Spot taker (0.1% / leg) and a
+    # conservative slippage assumption for market orders. Round-trip costs are
+    # 2x per-leg (entry + exit). Risk-per-trade and R:R checks bake these in
+    # so paper-profitable setups must clear real-world friction.
+    taker_fee_percent: float = Field(default=0.1, ge=0)
+    slippage_assumption_percent: float = Field(default=0.05, ge=0)
+    min_reward_to_risk_ratio: float = Field(default=1.5, ge=0)
 
     kill_switch_enabled: bool = True
 

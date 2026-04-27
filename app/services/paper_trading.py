@@ -12,11 +12,15 @@ class PaperTradingExecutor:
         paper_trading_enabled: bool = True,
         real_trading_enabled: bool = False,
         default_order_quantity: float = 0.001,
+        taker_fee_percent: float = 0.0,
+        slippage_assumption_percent: float = 0.0,
         audit_logger: AuditLogger | None = None,
     ) -> None:
         self.paper_trading_enabled = paper_trading_enabled
         self.real_trading_enabled = real_trading_enabled
         self.default_order_quantity = default_order_quantity
+        self.taker_fee_percent = taker_fee_percent
+        self.slippage_assumption_percent = slippage_assumption_percent
         self.audit_logger = audit_logger
         init_db()
 
@@ -85,9 +89,12 @@ class PaperTradingExecutor:
                 raise ValueError("Position is not open.")
 
             if position.action == "BUY":
-                realized_pnl = (exit_price - position.entry_price) * position.quantity
+                gross_pnl = (exit_price - position.entry_price) * position.quantity
             else:
-                realized_pnl = (position.entry_price - exit_price) * position.quantity
+                gross_pnl = (position.entry_price - exit_price) * position.quantity
+
+            cost = self._round_trip_cost(position.entry_price, exit_price, position.quantity)
+            realized_pnl = gross_pnl - cost
 
             from datetime import datetime, timezone
 
@@ -96,6 +103,10 @@ class PaperTradingExecutor:
             position.exit_price = exit_price
             position.exit_reason = exit_reason
             position.realized_pnl = realized_pnl
+            payload = dict(position.payload or {})
+            payload["gross_pnl"] = gross_pnl
+            payload["round_trip_cost"] = cost
+            position.payload = payload
             db.commit()
             db.refresh(position)
 
@@ -126,8 +137,8 @@ class PaperTradingExecutor:
                 for position in positions
             ]
 
-    @staticmethod
     def enrich_unrealized_pnl(
+        self,
         position: PaperPositionSchema,
         current_price: float | None,
     ) -> PaperPositionSchema:
@@ -135,9 +146,12 @@ class PaperTradingExecutor:
             return position
 
         if position.action == "BUY":
-            unrealized_pnl = (current_price - position.entry_price) * position.quantity
+            gross_pnl = (current_price - position.entry_price) * position.quantity
         else:
-            unrealized_pnl = (position.entry_price - current_price) * position.quantity
+            gross_pnl = (position.entry_price - current_price) * position.quantity
+
+        cost = self._round_trip_cost(position.entry_price, current_price, position.quantity)
+        unrealized_pnl = gross_pnl - cost
 
         return position.model_copy(
             update={
@@ -145,6 +159,13 @@ class PaperTradingExecutor:
                 "unrealized_pnl": unrealized_pnl,
             }
         )
+
+    def _round_trip_cost(
+        self, entry_price: float, exit_price: float, quantity: float
+    ) -> float:
+        fee_rate = self.taker_fee_percent / 100
+        slip_rate = self.slippage_assumption_percent / 100
+        return (entry_price + exit_price) * quantity * (fee_rate + slip_rate)
 
     def has_open_position(self, symbol: str) -> bool:
         from sqlalchemy import select

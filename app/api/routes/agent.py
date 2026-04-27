@@ -17,6 +17,7 @@ from app.schemas.agent import (
 )
 from app.schemas.risk import RiskDecision
 from app.schemas.signal import SignalRequest, TradeSignal
+from app.providers.ai_provider import hold_signal
 from app.services.ai_signal_service import AISignalService
 from app.services.autonomous_runner import AutonomousRunner
 from app.services.market_service import MarketService
@@ -86,9 +87,17 @@ async def process_autonomous_tick(
                 reason="Ya existe una posición abierta para el símbolo.",
             )
 
+        account_state = account_state_for_risk(system_state, executor)
+        skip_reason = risk_manager.pre_signal_skip_reason(account_state)
+        if skip_reason:
+            return AgentTickResult(
+                closed_positions=closed_positions,
+                run_result=None,
+                reason=f"Tick saltado sin llamar a IA: {skip_reason}.",
+            )
+
         enriched_request = await enrich_signal_request(request, market_service)
         signal = await signal_service.generate_signal(enriched_request)
-        account_state = account_state_for_risk(system_state, executor)
         risk_decision = risk_manager.validate_trade(signal, account_state, market_price=current_price)
 
         if not risk_decision.approved:
@@ -144,14 +153,11 @@ async def run_agent(
     system_state: SystemStateService = Depends(get_system_state),
     market_service: MarketService = Depends(get_market_service),
 ) -> AgentRunResult:
-    enriched_request = await enrich_signal_request(request, market_service)
-    signal = await signal_service.generate_signal(enriched_request)
-
-    symbol_lock = get_symbol_lock_registry().get(signal.symbol)
+    symbol_lock = get_symbol_lock_registry().get(request.symbol)
     async with symbol_lock:
-        if executor.has_open_position(signal.symbol):
+        if executor.has_open_position(request.symbol):
             return AgentRunResult(
-                signal=signal,
+                signal=hold_signal(request.symbol, "Ya existe una posición abierta para el símbolo."),
                 risk_decision=RiskDecision(
                     approved=False,
                     reason="Ya existe una posición abierta para el símbolo.",
@@ -159,8 +165,19 @@ async def run_agent(
                 execution_result=None,
             )
 
-        market_price = await market_service.get_current_price(request.symbol, request.market_context)
         account_state = account_state_for_risk(system_state, executor)
+        skip_reason = risk_manager.pre_signal_skip_reason(account_state)
+        if skip_reason:
+            return AgentRunResult(
+                signal=hold_signal(request.symbol, skip_reason),
+                risk_decision=RiskDecision(approved=False, reason=skip_reason),
+                execution_result=None,
+            )
+
+        enriched_request = await enrich_signal_request(request, market_service)
+        signal = await signal_service.generate_signal(enriched_request)
+
+        market_price = await market_service.get_current_price(request.symbol, request.market_context)
         risk_decision = risk_manager.validate_trade(signal, account_state, market_price=market_price)
 
         if not risk_decision.approved:
@@ -239,6 +256,7 @@ async def start_autonomous_runner(
             interval_seconds=request.interval_seconds,
             open_new_position=request.open_new_position,
             tick_handler=tick_handler,
+            align_to_candle_close=request.align_to_candle_close,
         )
     )
 

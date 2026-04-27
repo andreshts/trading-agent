@@ -2,10 +2,36 @@ from app.providers.ai_provider import AIProvider, hold_signal, parse_trade_signa
 from app.schemas.signal import SignalRequest, TradeSignal
 
 
+_RESPONSE_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "symbol": {"type": "STRING"},
+        "action": {"type": "STRING", "enum": ["BUY", "SELL", "HOLD"]},
+        "confidence": {"type": "NUMBER"},
+        "entry_price": {"type": "NUMBER", "nullable": True},
+        "stop_loss": {"type": "NUMBER", "nullable": True},
+        "take_profit": {"type": "NUMBER", "nullable": True},
+        "risk_amount": {"type": "NUMBER"},
+        "reason": {"type": "STRING"},
+    },
+    "required": ["symbol", "action", "confidence", "reason"],
+}
+
+
 class GeminiProvider(AIProvider):
-    def __init__(self, api_key: str, model: str) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        temperature: float = 0.1,
+        top_p: float = 0.9,
+        max_output_tokens: int = 512,
+    ) -> None:
         self.api_key = api_key
         self.model = model
+        self.temperature = temperature
+        self.top_p = top_p
+        self.max_output_tokens = max_output_tokens
 
     async def generate_signal(self, request: SignalRequest, prompt: str) -> TradeSignal:
         if not self.api_key or self.api_key == "replace_me":
@@ -21,9 +47,14 @@ class GeminiProvider(AIProvider):
             response = client.models.generate_content(
                 model=self.model,
                 contents=prompt,
-                config={"response_mime_type": "application/json"},
+                config={
+                    "response_mime_type": "application/json",
+                    "response_schema": _RESPONSE_SCHEMA,
+                    "temperature": self.temperature,
+                    "top_p": self.top_p,
+                    "max_output_tokens": self.max_output_tokens,
+                },
             )
             return parse_trade_signal(response.text, request.symbol)
         except Exception as exc:
             return hold_signal(request.symbol, f"Gemini provider error: {exc}")
-
