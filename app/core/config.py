@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     paper_trading_enabled: bool = True
     real_trading_enabled: bool = False
     execution_mode: Literal["paper", "binance_testnet", "binance_live"] = "paper"
+    trading_market_type: Literal["spot", "futures", "margin"] = "spot"
 
     market_data_provider: Literal["binance", "context"] = "binance"
     market_data_timeout_seconds: float = Field(default=5, gt=0)
@@ -42,12 +43,17 @@ class Settings(BaseSettings):
     binance_api_secret: str = "replace_me"
     binance_testnet_base_url: str = "https://testnet.binance.vision"
     binance_live_base_url: str = "https://api.binance.com"
+    binance_futures_testnet_base_url: str = "https://demo-fapi.binance.com"
+    binance_futures_live_base_url: str = "https://fapi.binance.com"
+    binance_margin_live_base_url: str = "https://api.binance.com"
     binance_recv_window: int = Field(default=5000, gt=0, le=60000)
     binance_max_retries: int = Field(default=3, ge=0, le=10)
     binance_retry_backoff_seconds: float = Field(default=0.5, ge=0)
     binance_use_test_order_endpoint: bool = False
     binance_order_type: Literal["market", "limit"] = "market"
     binance_limit_time_in_force: Literal["GTC", "IOC", "FOK"] = "IOC"
+    binance_futures_position_mode: Literal["one_way", "hedge"] = "one_way"
+    binance_margin_isolated: bool = True
     binance_place_oco_protection: bool = False
     binance_stop_limit_slippage_percent: float = Field(default=0.1, ge=0)
     binance_user_stream_enabled: bool = False

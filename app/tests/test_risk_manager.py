@@ -126,12 +126,43 @@ def test_rejects_buy_with_stop_loss_above_entry() -> None:
 
 def test_rejects_sell_with_stop_loss_below_entry() -> None:
     decision = make_manager().validate_trade(
-        make_signal(action="SELL", stop_loss=63000, take_profit=62000),
+        make_signal(
+            action="SELL",
+            market_type="futures",
+            position_side="short",
+            stop_loss=63000,
+            take_profit=62000,
+        ),
         make_account(),
     )
 
     assert decision.approved is False
     assert decision.reason == "SELL inválido: stop_loss debe estar por encima de entry_price"
+
+
+def test_rejects_spot_sell_as_opening_short() -> None:
+    decision = make_manager().validate_trade(
+        make_signal(action="SELL", stop_loss=65600, take_profit=62000),
+        make_account(),
+    )
+
+    assert decision.approved is False
+    assert decision.reason == "Spot no permite abrir shorts: SELL solo puede cerrar una posición long existente"
+
+
+def test_approves_futures_short_open() -> None:
+    decision = make_manager().validate_trade(
+        make_signal(
+            action="SELL",
+            market_type="futures",
+            position_side="short",
+            stop_loss=65600,
+            take_profit=62000,
+        ),
+        make_account(),
+    )
+
+    assert decision.approved is True
 
 
 def test_rejects_active_kill_switch() -> None:

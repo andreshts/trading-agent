@@ -26,11 +26,15 @@ def hold_signal(symbol: str, reason: str) -> TradeSignal:
     )
 
 
-def parse_trade_signal(raw_content: str | dict[str, Any], symbol: str) -> TradeSignal:
+def parse_trade_signal(
+    raw_content: str | dict[str, Any],
+    symbol: str,
+    market_type: str = "spot",
+) -> TradeSignal:
     try:
         payload = raw_content if isinstance(raw_content, dict) else json.loads(raw_content)
         payload.setdefault("symbol", symbol)
+        payload.setdefault("market_type", market_type)
         return TradeSignal.model_validate(payload)
     except (json.JSONDecodeError, ValidationError, TypeError, ValueError) as exc:
         return hold_signal(symbol, f"Invalid AI response: {exc}")
-

@@ -108,6 +108,10 @@ class RiskManager:
         if signal.entry_price is None:
             return self._reject("Operación bloqueada: no tiene precio de entrada", max_risk, quantity)
 
+        market_error = self._validate_market_mode(signal)
+        if market_error:
+            return self._reject(market_error, max_risk, quantity)
+
         coherence_error = self._validate_price_coherence(signal)
         if coherence_error:
             return self._reject(coherence_error, max_risk, quantity)
@@ -195,6 +199,25 @@ class RiskManager:
             return (
                 f"R:R neto {ratio:.2f} inferior al mínimo {self.min_reward_to_risk_ratio:g}"
             )
+        return None
+
+    @staticmethod
+    def _validate_market_mode(signal: TradeSignal) -> str | None:
+        if signal.intent != "open":
+            return "RiskManager solo aprueba aperturas nuevas; cierres usan el gestor de posiciones"
+
+        if signal.market_type == "spot":
+            if signal.action == "SELL" or signal.position_side == "short":
+                return "Spot no permite abrir shorts: SELL solo puede cerrar una posición long existente"
+            if signal.action == "BUY" and signal.position_side != "long":
+                return "Spot inválido: BUY de apertura debe ser posición long"
+
+        if signal.market_type in {"futures", "margin"}:
+            if signal.action == "BUY" and signal.position_side != "long":
+                return f"{signal.market_type} inválido: BUY de apertura debe ser long"
+            if signal.action == "SELL" and signal.position_side != "short":
+                return f"{signal.market_type} inválido: SELL de apertura debe ser short"
+
         return None
 
     @staticmethod

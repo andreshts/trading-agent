@@ -4,6 +4,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from app.schemas.signal import TradeSignal
+from app.schemas.signal import MarketType, PositionSide, SignalIntent
 
 
 class PaperTradeRequest(BaseModel):
@@ -15,6 +16,9 @@ class PaperTradeResult(BaseModel):
     id: int | None = None
     symbol: str
     action: Literal["BUY", "SELL"]
+    market_type: MarketType = "spot"
+    intent: SignalIntent = "open"
+    position_side: PositionSide = "long"
     quantity: float = Field(..., gt=0)
     entry_price: float
     stop_loss: float
@@ -37,6 +41,9 @@ class PaperPosition(BaseModel):
     id: int
     symbol: str
     action: Literal["BUY", "SELL"]
+    market_type: MarketType = "spot"
+    intent: SignalIntent = "open"
+    position_side: PositionSide = "long"
     status: Literal["OPEN", "CLOSED"]
     quantity: float
     entry_price: float

@@ -267,6 +267,7 @@ async def start_autonomous_runner(
         runner.start(
             symbols=request.symbols,
             timeframe=request.timeframe,
+            market_type=request.market_type,
             market_context=request.market_context,
             interval_seconds=request.interval_seconds,
             open_new_position=request.open_new_position,

@@ -7,6 +7,9 @@ _RESPONSE_SCHEMA = {
     "properties": {
         "symbol": {"type": "STRING"},
         "action": {"type": "STRING", "enum": ["BUY", "SELL", "HOLD"]},
+        "market_type": {"type": "STRING", "enum": ["spot", "futures", "margin"]},
+        "intent": {"type": "STRING", "enum": ["open", "close", "reduce"]},
+        "position_side": {"type": "STRING", "enum": ["long", "short"], "nullable": True},
         "confidence": {"type": "NUMBER"},
         "entry_price": {"type": "NUMBER", "nullable": True},
         "stop_loss": {"type": "NUMBER", "nullable": True},
@@ -66,6 +69,6 @@ class GeminiProvider(AIProvider):
                 contents=prompt,
                 config=config,
             )
-            return parse_trade_signal(response.text, request.symbol)
+            return parse_trade_signal(response.text, request.symbol, request.market_type)
         except Exception as exc:
             return hold_signal(request.symbol, f"Gemini provider error: {exc}")

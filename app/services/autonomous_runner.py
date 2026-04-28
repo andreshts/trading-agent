@@ -52,6 +52,7 @@ class AutonomousRunner:
         self._task: asyncio.Task | None = None
         self._symbols: list[str] = []
         self._timeframe = "1H"
+        self._market_type = "spot"
         self._market_context = ""
         self._interval_seconds = 60.0
         self._open_new_position = True
@@ -71,6 +72,7 @@ class AutonomousRunner:
         open_new_position: bool,
         tick_handler: TickHandler,
         align_to_candle_close: bool = False,
+        market_type: str = "spot",
     ) -> dict:
         if self.is_running:
             raise RuntimeError("Autonomous runner is already running.")
@@ -80,6 +82,7 @@ class AutonomousRunner:
             raise ValueError("At least one symbol is required.")
 
         self._timeframe = timeframe.strip().upper()
+        self._market_type = market_type.strip().lower()
         self._market_context = market_context.strip()
         self._interval_seconds = interval_seconds
         self._open_new_position = open_new_position
@@ -118,6 +121,7 @@ class AutonomousRunner:
             "running": self.is_running,
             "symbols": self._symbols,
             "timeframe": self._timeframe,
+            "market_type": self._market_type,
             "interval_seconds": self._interval_seconds,
             "open_new_position": self._open_new_position,
             "align_to_candle_close": self._align_to_candle_close,
@@ -136,6 +140,7 @@ class AutonomousRunner:
                 request = AgentTickRequest(
                     symbol=symbol,
                     timeframe=self._timeframe,
+                    market_type=self._market_type,
                     market_context=self._market_context,
                     open_new_position=self._open_new_position,
                 )

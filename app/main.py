@@ -98,7 +98,7 @@ async def lifespan(app: FastAPI):
         app.state.binance_market_stream = market_stream
 
     user_stream = None
-    if settings.execution_mode in {"binance_testnet", "binance_live"}:
+    if settings.execution_mode in {"binance_testnet", "binance_live"} and settings.trading_market_type == "spot":
         base_url = (
             settings.binance_testnet_base_url
             if settings.execution_mode == "binance_testnet"

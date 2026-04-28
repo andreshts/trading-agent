@@ -25,6 +25,7 @@ class AgentTickResult(BaseModel):
 class AutonomousStartRequest(BaseModel):
     symbols: list[str] = Field(default_factory=lambda: ["BTCUSDT"], min_length=1)
     timeframe: str = "15M"
+    market_type: str = "spot"
     market_context: str = Field(
         default="Analiza el mercado con los datos calculados por el backend. Opera solo si hay ventaja clara.",
         min_length=1,
@@ -38,6 +39,7 @@ class AutonomousRunnerStatus(BaseModel):
     running: bool
     symbols: list[str]
     timeframe: str
+    market_type: str = "spot"
     interval_seconds: float
     open_new_position: bool
     align_to_candle_close: bool = False

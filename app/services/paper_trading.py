@@ -44,6 +44,7 @@ class PaperTradingExecutor:
         calculated_risk = risk_amount or abs(signal.entry_price - signal.stop_loss) * trade_quantity
 
         with SessionLocal() as db:
+            payload = signal.model_dump(mode="json")
             position = PaperPosition(
                 symbol=signal.symbol,
                 action=signal.action,
@@ -53,7 +54,7 @@ class PaperTradingExecutor:
                 stop_loss=signal.stop_loss,
                 take_profit=signal.take_profit,
                 risk_amount=calculated_risk,
-                payload=signal.model_dump(mode="json"),
+                payload=payload,
             )
             db.add(position)
             db.commit()
@@ -63,6 +64,9 @@ class PaperTradingExecutor:
             id=position.id,
             symbol=signal.symbol,
             action=signal.action,
+            market_type=signal.market_type,
+            intent=signal.intent,
+            position_side=signal.position_side or ("long" if signal.action == "BUY" else "short"),
             quantity=trade_quantity,
             entry_price=signal.entry_price,
             stop_loss=signal.stop_loss,
@@ -188,6 +192,12 @@ class PaperTradingExecutor:
         return position.model_copy(
             update={
                 "execution_mode": payload.get("execution_mode", "paper"),
+                "market_type": payload.get("market_type", "spot"),
+                "intent": payload.get("intent", "open"),
+                "position_side": payload.get(
+                    "position_side",
+                    "long" if position.action == "BUY" else "short",
+                ),
                 "exchange_order_id": payload.get("exchange_order_id"),
                 "exchange_status": payload.get("exchange_status"),
                 "close_exchange_order_id": payload.get("close_exchange_order_id"),

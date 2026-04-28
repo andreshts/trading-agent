@@ -9,6 +9,12 @@ from app.services.ai_signal_service import AISignalService
 from app.services.audit_logger import AuditLogger
 from app.services.autonomous_runner import AutonomousRunner
 from app.services.binance_spot import BinanceSpotClient, BinanceSpotExecutor
+from app.services.binance_multi_market import (
+    BinanceFuturesClient,
+    BinanceFuturesExecutor,
+    BinanceMarginClient,
+    BinanceMarginExecutor,
+)
 from app.services.kill_switch import KillSwitchService
 from app.services.market_service import MarketService
 from app.services.paper_trading import PaperTradingExecutor
@@ -100,11 +106,62 @@ def get_autonomous_runner() -> AutonomousRunner:
 def get_paper_executor() -> PaperTradingExecutor:
     settings = get_settings()
     if settings.execution_mode in {"binance_testnet", "binance_live"}:
+        allowed_symbols = [
+            symbol.strip().upper()
+            for symbol in settings.allowed_symbols.split(",")
+            if symbol.strip()
+        ]
+        common = {
+            "execution_mode": settings.execution_mode,
+            "real_trading_enabled": settings.real_trading_enabled,
+            "default_order_quantity": settings.default_order_quantity,
+            "allowed_symbols": allowed_symbols,
+            "max_notional_per_order": settings.max_notional_per_order,
+            "order_type": settings.binance_order_type,
+            "limit_time_in_force": settings.binance_limit_time_in_force,
+            "use_test_order_endpoint": settings.binance_use_test_order_endpoint,
+            "audit_logger": get_audit_logger(),
+        }
+        if settings.trading_market_type == "futures":
+            base_url = (
+                settings.binance_futures_testnet_base_url
+                if settings.execution_mode == "binance_testnet"
+                else settings.binance_futures_live_base_url
+            )
+            return BinanceFuturesExecutor(
+                client=BinanceFuturesClient(
+                    api_key=settings.binance_api_key,
+                    api_secret=settings.binance_api_secret,
+                    base_url=base_url,
+                    recv_window=settings.binance_recv_window,
+                    max_retries=settings.binance_max_retries,
+                    retry_backoff_seconds=settings.binance_retry_backoff_seconds,
+                ),
+                position_mode=settings.binance_futures_position_mode,
+                **common,
+            )
+
+        if settings.trading_market_type == "margin":
+            return BinanceMarginExecutor(
+                client=BinanceMarginClient(
+                    api_key=settings.binance_api_key,
+                    api_secret=settings.binance_api_secret,
+                    base_url=settings.binance_margin_live_base_url,
+                    recv_window=settings.binance_recv_window,
+                    max_retries=settings.binance_max_retries,
+                    retry_backoff_seconds=settings.binance_retry_backoff_seconds,
+                ),
+                isolated=settings.binance_margin_isolated,
+                **common,
+            )
+
         base_url = (
             settings.binance_testnet_base_url
             if settings.execution_mode == "binance_testnet"
             else settings.binance_live_base_url
         )
+        spot_common = dict(common)
+        spot_common.pop("use_test_order_endpoint")
         return BinanceSpotExecutor(
             client=BinanceSpotClient(
                 api_key=settings.binance_api_key,
@@ -114,22 +171,11 @@ def get_paper_executor() -> PaperTradingExecutor:
                 max_retries=settings.binance_max_retries,
                 retry_backoff_seconds=settings.binance_retry_backoff_seconds,
             ),
-            execution_mode=settings.execution_mode,
-            real_trading_enabled=settings.real_trading_enabled,
-            default_order_quantity=settings.default_order_quantity,
-            allowed_symbols=[
-                symbol.strip().upper()
-                for symbol in settings.allowed_symbols.split(",")
-                if symbol.strip()
-            ],
-            max_notional_per_order=settings.max_notional_per_order,
-            order_type=settings.binance_order_type,
-            limit_time_in_force=settings.binance_limit_time_in_force,
             place_oco_protection=settings.binance_place_oco_protection,
             stop_limit_slippage_percent=settings.binance_stop_limit_slippage_percent,
             use_test_order_endpoint=settings.binance_use_test_order_endpoint,
             max_signal_price_deviation_percent=settings.max_signal_price_deviation_percent,
-            audit_logger=get_audit_logger(),
+            **spot_common,
         )
 
     return PaperTradingExecutor(

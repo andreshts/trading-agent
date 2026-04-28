@@ -36,6 +36,9 @@ class MockAIProvider(AIProvider):
         return TradeSignal(
             symbol=request.symbol,
             action=action,
+            market_type=request.market_type,
+            intent="open",
+            position_side=("long" if action == "BUY" else "short") if action != "HOLD" else None,
             confidence=confidence,
             entry_price=price if action != "HOLD" else None,
             stop_loss=stop_loss if action != "HOLD" else None,
@@ -50,4 +53,3 @@ class MockAIProvider(AIProvider):
         if not match:
             return None
         return float(match.group(0).replace(",", "."))
-

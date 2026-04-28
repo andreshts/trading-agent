@@ -23,7 +23,6 @@ class OpenAIProvider(AIProvider):
                 input=prompt,
                 text={"format": {"type": "json_object"}},
             )
-            return parse_trade_signal(response.output_text, request.symbol)
+            return parse_trade_signal(response.output_text, request.symbol, request.market_type)
         except Exception as exc:
             return hold_signal(request.symbol, f"OpenAI provider error: {exc}")
-

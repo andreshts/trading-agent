@@ -26,6 +26,7 @@ async def get_status(
         app_name=settings.app_name,
         app_env=settings.app_env,
         execution_mode=settings.execution_mode,
+        trading_market_type=settings.trading_market_type,
         trading_enabled=account_state.trading_enabled and not kill_switch.is_active(),
         paper_trading_enabled=settings.paper_trading_enabled,
         real_trading_enabled=settings.real_trading_enabled,

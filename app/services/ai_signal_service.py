@@ -16,7 +16,11 @@ Reglas obligatorias:
 - Nunca sugieras una operación sin stop_loss.
 - Nunca inventes precios si no están en el contexto.
 - Usa los datos calculados de mercado antes que el criterio textual del usuario.
-- Si propones BUY o SELL, entry_price debe ser coherente con el precio actual.
+- Modo de mercado actual: {market_type}. Devuelve market_type exactamente con ese valor.
+- Si propones BUY o SELL, intent debe ser "open" y entry_price debe ser coherente con el precio actual.
+- En spot solo puedes abrir posición long con BUY. No abras short en spot.
+- En futures puedes abrir long con BUY o short con SELL.
+- En margin puedes abrir long con BUY o short con SELL; para short se asume venta con préstamo.
 {reward_to_risk_rule}
 - En BUY: stop_loss < entry_price < take_profit. En SELL: take_profit <
   entry_price < stop_loss. Verifica este orden antes de responder.
@@ -26,6 +30,9 @@ Formato esperado:
 {{
   "symbol": "string",
   "action": "BUY | SELL | HOLD",
+  "market_type": "spot | futures | margin",
+  "intent": "open | close | reduce",
+  "position_side": "long | short | null",
   "confidence": number entre 0 y 1,
   "entry_price": number o null,
   "stop_loss": number o null,
@@ -36,6 +43,7 @@ Formato esperado:
 
 Símbolo: {symbol}
 Temporalidad: {timeframe}
+Mercado: {market_type}
 
 Contexto de mercado:
 {market_context}
@@ -79,6 +87,7 @@ class AISignalService:
         return PROMPT_TEMPLATE.format(
             symbol=request.symbol,
             timeframe=request.timeframe,
+            market_type=request.market_type,
             market_context=request.market_context,
             reward_to_risk_rule=self._reward_to_risk_rule(),
         )

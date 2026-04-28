@@ -27,6 +27,7 @@ class SystemStatus(BaseModel):
     app_name: str
     app_env: str
     execution_mode: str
+    trading_market_type: str = "spot"
     trading_enabled: bool
     paper_trading_enabled: bool
     real_trading_enabled: bool
