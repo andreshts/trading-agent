@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends
 
 from app.api.deps import (
     get_ai_signal_service,
+    get_audit_logger,
     get_autonomous_runner,
     get_market_service,
     get_paper_executor,
@@ -73,7 +74,13 @@ async def process_autonomous_tick(
             for position in closed_positions:
                 system_state.register_closed_position(position.realized_pnl or 0)
 
+        audit = get_audit_logger()
+
         if not request.open_new_position:
+            audit.record(
+                "autonomous_runner_tick",
+                {"symbol": request.symbol, "skipped": True, "reason": "open_new_position=False"},
+            )
             return AgentTickResult(
                 closed_positions=closed_positions,
                 run_result=None,
@@ -81,6 +88,10 @@ async def process_autonomous_tick(
             )
 
         if executor.has_open_position(request.symbol):
+            audit.record(
+                "autonomous_runner_tick",
+                {"symbol": request.symbol, "skipped": True, "reason": "already_open"},
+            )
             return AgentTickResult(
                 closed_positions=closed_positions,
                 run_result=None,
@@ -90,6 +101,10 @@ async def process_autonomous_tick(
         account_state = account_state_for_risk(system_state, executor)
         skip_reason = risk_manager.pre_signal_skip_reason(account_state)
         if skip_reason:
+            audit.record(
+                "autonomous_runner_tick",
+                {"symbol": request.symbol, "skipped": True, "reason": skip_reason},
+            )
             return AgentTickResult(
                 closed_positions=closed_positions,
                 run_result=None,

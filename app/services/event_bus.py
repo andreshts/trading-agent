@@ -26,6 +26,7 @@ _AUDIT_RESOURCE_HINTS: dict[str, list[str]] = {
     "autonomous_runner_started": ["runner", "status"],
     "autonomous_runner_stopped": ["runner", "status"],
     "autonomous_runner_error": ["runner"],
+    "autonomous_runner_tick": ["runner"],
     "kill_switch_activated": ["status"],
     "kill_switch_deactivated": ["status"],
 }
