@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     gemini_temperature: float = Field(default=0.1, ge=0, le=2)
     gemini_top_p: float = Field(default=0.9, ge=0, le=1)
     gemini_max_output_tokens: int = Field(default=512, ge=64, le=8192)
+    # 0 disables thinking (recommended for JSON classifier — full budget goes
+    # to the response). >0 sets an explicit budget. -1 leaves the model default
+    # which for 2.5 Flash means dynamic thinking and risks truncated JSON.
+    gemini_thinking_budget: int = Field(default=0, ge=-1, le=24576)
 
     trading_enabled: bool = True
     paper_trading_enabled: bool = True

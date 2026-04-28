@@ -43,6 +43,7 @@ def get_ai_provider(settings: Settings | None = None) -> AIProvider:
             temperature=settings.gemini_temperature,
             top_p=settings.gemini_top_p,
             max_output_tokens=settings.gemini_max_output_tokens,
+            thinking_budget=settings.gemini_thinking_budget,
         )
     return MockAIProvider()
 
