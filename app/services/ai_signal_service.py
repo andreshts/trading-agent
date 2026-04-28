@@ -17,6 +17,14 @@ Reglas obligatorias:
 - Nunca inventes precios si no están en el contexto.
 - Usa los datos calculados de mercado antes que el criterio textual del usuario.
 - Si propones BUY o SELL, entry_price debe ser coherente con el precio actual.
+- Antes de proponer BUY o SELL, verifica la geometría del trade: la distancia
+  desde entry_price hasta take_profit debe ser al menos 1.5 veces mayor que
+  la distancia desde entry_price hasta stop_loss. Si los niveles técnicos
+  disponibles no permiten ese ratio, devuelve HOLD en lugar de forzar el
+  trade. Ejemplo: si entry=100 y stop_loss=99 (distancia 1), take_profit
+  debe ser >= 101.5 para BUY o <= 98.5 para SELL.
+- En BUY: stop_loss < entry_price < take_profit. En SELL: take_profit <
+  entry_price < stop_loss. Verifica este orden antes de responder.
 - Incluye una justificación breve en el campo reason.
 
 Formato esperado:
