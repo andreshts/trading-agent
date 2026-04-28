@@ -1,0 +1,6 @@
+{
+  "min_confidence": 0.4,
+  "min_reward_to_risk_ratio": 0.0,
+  "slippage_assumption_percent": 0.1,
+  "taker_fee_percent": 0.2
+}

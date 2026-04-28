@@ -21,6 +21,7 @@ from app.services.binance_user_stream import BinanceUserDataStream
 from app.services.event_bus import get_event_bus
 from app.services.notifier import get_notifier
 from app.services.reconciliation import StartupReconciliationService
+from app.services.runtime_config import get_runtime_config_store
 
 
 logger = logging.getLogger(__name__)
@@ -65,6 +66,11 @@ async def _price_ticker_loop() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    # Apply persisted runtime overrides (R:R, fees, etc.) before any service
+    # caches a copy of the settings.
+    applied = get_runtime_config_store().apply_to(settings)
+    if applied:
+        logger.info("applied runtime config overrides: %s", applied)
     bus = get_event_bus()
     bus.bind_loop(asyncio.get_running_loop())
     
