@@ -57,7 +57,7 @@ class MarketService:
         if self.provider != "binance":
             return self.with_current_price_context(market_context, current_price)
 
-        candles = await self._get_binance_klines(symbol, timeframe)
+        candles = self._closed_candles(await self._get_binance_klines(symbol, timeframe))
         if not candles:
             return self.with_current_price_context(market_context, current_price)
 
@@ -129,6 +129,12 @@ class MarketService:
             "volume": float(row[5]),
             "close_time": int(row[6]),
         }
+
+    @staticmethod
+    def _closed_candles(candles: list[dict], now_ms: int | None = None) -> list[dict]:
+        if now_ms is None:
+            now_ms = int(time.time() * 1000)
+        return [candle for candle in candles if candle.get("close_time", 0) <= now_ms]
 
     @staticmethod
     def summarize_candles(candles: list[dict], current_price: float | None = None) -> str:

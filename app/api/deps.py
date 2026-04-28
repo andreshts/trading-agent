@@ -49,7 +49,12 @@ def get_ai_provider(settings: Settings | None = None) -> AIProvider:
 
 
 def get_ai_signal_service() -> AISignalService:
-    return AISignalService(provider=get_ai_provider(), audit_logger=get_audit_logger())
+    settings = get_settings()
+    return AISignalService(
+        provider=get_ai_provider(settings),
+        audit_logger=get_audit_logger(),
+        min_reward_to_risk_ratio=settings.min_reward_to_risk_ratio,
+    )
 
 
 def get_risk_manager() -> RiskManager:

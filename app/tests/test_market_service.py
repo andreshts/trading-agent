@@ -38,3 +38,26 @@ def test_normalize_binance_interval_accepts_uppercase_timeframe() -> None:
 
 def test_summarize_candles_requires_enough_data() -> None:
     assert MarketService.summarize_candles(make_candles(count=10)) == ""
+
+
+def test_closed_candles_excludes_current_open_binance_candle() -> None:
+    candles = make_candles(count=31)
+    candles[-1]["close_time"] = 2_000
+    candles[-1]["volume"] = 0.01
+
+    closed = MarketService._closed_candles(candles, now_ms=1_999)
+
+    assert len(closed) == 30
+    assert closed[-1]["volume"] == 129
+
+
+def test_summary_volume_uses_last_closed_candle_after_filtering() -> None:
+    candles = make_candles(count=60)
+    candles[-1]["close_time"] = 2_000
+    candles[-1]["volume"] = 0.01
+
+    closed = MarketService._closed_candles(candles, now_ms=1_999)
+    summary = MarketService.summarize_candles(closed, current_price=160)
+
+    assert "Volumen actual: 158" in summary
+    assert "Volumen actual: 0.01" not in summary
