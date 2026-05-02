@@ -376,6 +376,13 @@ class BinanceSpotExecutor(PaperTradingExecutor):
                     requested_price=take_profit,
                 )
             except Exception as exc:
+                self._audit_oco_protection_failed(
+                    symbol=signal.symbol,
+                    quantity=executed_qty,
+                    take_profit=take_profit,
+                    stop_loss=stop_loss,
+                    error=exc,
+                )
                 self._emergency_close_after_unprotected_entry(signal.symbol, executed_qty)
                 raise RuntimeError(f"OCO protection failed; emergency close sent: {exc}") from exc
 
@@ -714,6 +721,30 @@ class BinanceSpotExecutor(PaperTradingExecutor):
             stop_limit_price=stop_limit_price,
             test_order=self.use_test_order_endpoint,
             list_client_order_id=list_client_order_id,
+        )
+
+    def _audit_oco_protection_failed(
+        self,
+        symbol: str,
+        quantity: float,
+        take_profit: float,
+        stop_loss: float,
+        error: Exception,
+    ) -> None:
+        if not self.audit_logger:
+            return
+        stop_limit_price = stop_loss * (1 - (self.stop_limit_slippage_percent / 100))
+        self.audit_logger.record(
+            "binance_oco_protection_failed",
+            {
+                "symbol": symbol.upper(),
+                "quantity": quantity,
+                "take_profit": take_profit,
+                "stop_loss": stop_loss,
+                "stop_limit_price": stop_limit_price,
+                "stop_limit_slippage_percent": self.stop_limit_slippage_percent,
+                "error": str(error),
+            },
         )
 
     def _emergency_close_after_unprotected_entry(self, symbol: str, quantity: float) -> None:
