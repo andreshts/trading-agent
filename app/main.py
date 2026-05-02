@@ -129,8 +129,19 @@ async def lifespan(app: FastAPI):
                 ws_base_url=ws_base_url,
                 audit_logger=AuditLogger(),
             )
-            await user_stream.start()
-            app.state.binance_user_stream = user_stream
+            try:
+                await user_stream.start()
+                app.state.binance_user_stream = user_stream
+            except Exception:
+                logger.exception("binance user stream startup failed; continuing without it")
+                AuditLogger().record(
+                    "binance_user_stream_startup_failed",
+                    {
+                        "execution_mode": settings.execution_mode,
+                        "base_url": base_url,
+                    },
+                )
+                user_stream = None
     try:
         yield
     finally:

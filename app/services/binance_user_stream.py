@@ -51,7 +51,10 @@ class BinanceUserDataStream:
                 except asyncio.CancelledError:
                     pass
         if self._listen_key:
-            await asyncio.to_thread(self.client.close_listen_key, self._listen_key)
+            try:
+                await asyncio.to_thread(self.client.close_listen_key, self._listen_key)
+            except Exception as exc:
+                self._audit("binance_user_stream_close_failed", {"error": str(exc)})
             self._listen_key = None
         self._audit("binance_user_stream_stopped", {})
 
