@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import time
 import uuid
+from decimal import Decimal, ROUND_DOWN
 from urllib.parse import urlencode
 
 import httpx
@@ -36,6 +37,7 @@ class BinanceSpotClient:
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
         self.retry_backoff_seconds = retry_backoff_seconds
+        self._symbol_filters_cache: dict[str, dict] = {}
 
     @property
     def configured(self) -> bool:
@@ -48,6 +50,27 @@ class BinanceSpotClient:
 
     def get_account(self) -> dict:
         return self._signed_request("GET", "/api/v3/account")
+
+    def get_symbol_filters(self, symbol: str) -> dict:
+        normalized_symbol = symbol.upper()
+        cached = self._symbol_filters_cache.get(normalized_symbol)
+        if cached is not None:
+            return cached
+
+        response = self._request_with_retries(
+            "GET",
+            f"{self.base_url}/api/v3/exchangeInfo?{urlencode({'symbol': normalized_symbol})}",
+        )
+        symbols = response.get("symbols") or []
+        if not symbols:
+            raise RuntimeError(f"Binance did not return exchange filters for {normalized_symbol}.")
+        filters = {
+            item.get("filterType"): item
+            for item in symbols[0].get("filters", [])
+            if item.get("filterType")
+        }
+        self._symbol_filters_cache[normalized_symbol] = filters
+        return filters
 
     def create_listen_key(self) -> str:
         response = self._api_key_request("POST", "/api/v3/userDataStream")
@@ -350,6 +373,12 @@ class BinanceSpotExecutor(PaperTradingExecutor):
         if executed_qty <= 0:
             raise RuntimeError("Binance order was not filled.")
         stop_loss, take_profit = self._protective_prices_from_fill(signal, fill_price)
+        if self.place_oco_protection:
+            stop_loss, take_profit = self._round_protective_prices_for_exchange(
+                signal.symbol,
+                stop_loss,
+                take_profit,
+            )
         calculated_risk = abs(fill_price - stop_loss) * executed_qty
         protective_order = None
         protective_order_record_id = None
@@ -711,6 +740,9 @@ class BinanceSpotExecutor(PaperTradingExecutor):
         intent_id: str | None = None,
     ) -> dict:
         stop_limit_price = stop_loss * (1 - (self.stop_limit_slippage_percent / 100))
+        tick_size = self._price_tick_size(symbol)
+        if tick_size is not None:
+            stop_limit_price = self._round_down_to_step(stop_limit_price, tick_size)
         oco_intent_id = intent_id or self._new_intent_id("oco")
         list_client_order_id = self._derive_client_order_id(oco_intent_id, "OCO")
         return self.client.create_oco_sell_order(
@@ -723,6 +755,44 @@ class BinanceSpotExecutor(PaperTradingExecutor):
             list_client_order_id=list_client_order_id,
         )
 
+    def _round_protective_prices_for_exchange(
+        self,
+        symbol: str,
+        stop_loss: float,
+        take_profit: float | None,
+    ) -> tuple[float, float | None]:
+        tick_size = self._price_tick_size(symbol)
+        if tick_size is None:
+            return stop_loss, take_profit
+        rounded_stop_loss = self._round_down_to_step(stop_loss, tick_size)
+        rounded_take_profit = (
+            self._round_down_to_step(take_profit, tick_size)
+            if take_profit is not None
+            else None
+        )
+        return rounded_stop_loss, rounded_take_profit
+
+    def _price_tick_size(self, symbol: str) -> float | None:
+        try:
+            filters = self.client.get_symbol_filters(symbol)
+            price_filter = filters.get("PRICE_FILTER") or {}
+            tick_size = float(price_filter.get("tickSize") or 0)
+        except Exception as exc:
+            if self.audit_logger:
+                self.audit_logger.record(
+                    "binance_symbol_filters_unavailable",
+                    {"symbol": symbol.upper(), "error": str(exc)},
+                )
+            return None
+        return tick_size if tick_size > 0 else None
+
+    @staticmethod
+    def _round_down_to_step(value: float, step: float) -> float:
+        decimal_value = Decimal(str(value))
+        decimal_step = Decimal(str(step))
+        units = (decimal_value / decimal_step).to_integral_value(rounding=ROUND_DOWN)
+        return float(units * decimal_step)
+
     def _audit_oco_protection_failed(
         self,
         symbol: str,
@@ -734,6 +804,9 @@ class BinanceSpotExecutor(PaperTradingExecutor):
         if not self.audit_logger:
             return
         stop_limit_price = stop_loss * (1 - (self.stop_limit_slippage_percent / 100))
+        tick_size = self._price_tick_size(symbol)
+        if tick_size is not None:
+            stop_limit_price = self._round_down_to_step(stop_limit_price, tick_size)
         self.audit_logger.record(
             "binance_oco_protection_failed",
             {

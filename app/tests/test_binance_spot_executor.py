@@ -79,6 +79,13 @@ class FakeBinanceClient:
     def get_account(self) -> dict:
         return {"balances": [{"asset": "USDT", "free": "2500", "locked": "0"}]}
 
+    def get_symbol_filters(self, symbol: str) -> dict:
+        return {
+            "PRICE_FILTER": {
+                "tickSize": "0.01000000",
+            }
+        }
+
     def create_oco_sell_order(
         self,
         symbol: str,
@@ -249,6 +256,26 @@ def test_binance_executor_places_oco_protection_after_buy_fill() -> None:
     assert client.oco_orders[0]["take_profit_price"] == pytest.approx(result.take_profit)
     assert client.oco_orders[0]["stop_price"] == pytest.approx(result.stop_loss)
     assert client.oco_orders[0]["stop_limit_price"] < client.oco_orders[0]["stop_price"]
+
+
+def test_binance_executor_rounds_oco_prices_to_tick_size() -> None:
+    client = FakeBinanceClient(fill_price=78493.98)
+    executor = make_executor(client=client, place_oco_protection=True)
+    signal = TradeSignal(
+        symbol="BTCUSDT",
+        action="BUY",
+        confidence=0.7,
+        entry_price=78493.98,
+        stop_loss=78310.54,
+        take_profit=78596.61,
+        reason="Valid setup.",
+    )
+
+    result = executor.execute(signal)
+
+    assert result.stop_loss == pytest.approx(78310.54)
+    assert result.take_profit == pytest.approx(78596.61)
+    assert client.oco_orders[0]["stop_limit_price"] == pytest.approx(78232.22)
 
 
 def test_binance_executor_cancels_oco_before_manual_close() -> None:
