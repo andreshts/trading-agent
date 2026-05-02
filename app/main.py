@@ -20,6 +20,7 @@ from app.services.binance_spot import BinanceSpotClient
 from app.services.binance_user_stream import BinanceUserDataStream
 from app.services.event_bus import get_event_bus
 from app.services.notifier import get_notifier
+from app.services.protective_exit_monitor import evaluate_protective_exits
 from app.services.reconciliation import StartupReconciliationService
 from app.services.runtime_config import get_runtime_config_store
 
@@ -29,38 +30,28 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
-PRICE_TICKER_INTERVAL_SECONDS = 2.0
-
-
-async def _price_ticker_loop() -> None:
-    """Periodically push current prices for open positions while WS clients exist."""
+async def _protective_exit_monitor_loop() -> None:
+    """Continuously enforce protective exits for open positions."""
     bus = get_event_bus()
     # Lazy imports to avoid touching dependencies before settings are ready.
-    from app.api.deps import get_market_service, get_paper_executor
+    from app.api.deps import get_market_service, get_paper_executor, get_system_state
 
     while True:
         try:
-            await asyncio.sleep(PRICE_TICKER_INTERVAL_SECONDS)
-            if not bus.has_subscribers():
-                continue
             executor = get_paper_executor()
-            positions = executor.list_positions(status="OPEN", limit=200)
-            symbols = {p.symbol for p in positions}
-            if not symbols:
-                continue
-            market = get_market_service()
-            prices: dict[str, float] = {}
-            for symbol in symbols:
-                price = await market.get_current_price(symbol)
-                if price is not None:
-                    prices[symbol] = price
-            if prices:
-                bus.publish("position_prices", {"prices": prices})
+            result = await evaluate_protective_exits(
+                executor=executor,
+                market_service=get_market_service(),
+                system_state=get_system_state(),
+            )
+            if result.prices and bus.has_subscribers():
+                bus.publish("position_prices", {"prices": result.prices})
+            await asyncio.sleep(settings.protective_exit_monitor_interval_seconds)
         except asyncio.CancelledError:
             raise
         except Exception:  # pragma: no cover - defensive
-            logger.exception("price ticker loop error")
-            await asyncio.sleep(PRICE_TICKER_INTERVAL_SECONDS)
+            logger.exception("protective exit monitor loop error")
+            await asyncio.sleep(settings.protective_exit_monitor_interval_seconds)
 
 
 @asynccontextmanager
@@ -78,7 +69,12 @@ async def lifespan(app: FastAPI):
     notifier = get_notifier()
     await notifier.start()
 
-    price_ticker_task = asyncio.create_task(_price_ticker_loop(), name="price-ticker")
+    protective_exit_task = None
+    if settings.protective_exit_monitor_enabled:
+        protective_exit_task = asyncio.create_task(
+            _protective_exit_monitor_loop(),
+            name="protective-exit-monitor",
+        )
 
     market_stream: BinanceMarketDataStream | None = None
     allowed_symbols = [
@@ -139,11 +135,12 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         await notifier.stop()
-        price_ticker_task.cancel()
-        try:
-            await price_ticker_task
-        except (asyncio.CancelledError, Exception):
-            pass
+        if protective_exit_task:
+            protective_exit_task.cancel()
+            try:
+                await protective_exit_task
+            except (asyncio.CancelledError, Exception):
+                pass
         if user_stream:
             await user_stream.stop()
         if market_stream:

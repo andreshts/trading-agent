@@ -38,6 +38,28 @@ class MarketService:
             return None, None
         return stream.get_bid(symbol), stream.get_ask(symbol)
 
+    async def get_exit_reference_price(
+        self,
+        symbol: str,
+        action: str = "BUY",
+    ) -> float | None:
+        """Return the price a protective close would realistically cross.
+
+        BUY positions close by selling, so bid is the first usable trigger.
+        SELL positions close by buying, so ask is the first usable trigger.
+        """
+        if self.provider == "binance":
+            stream = get_market_stream()
+            if stream is not None:
+                normalized_action = action.strip().upper()
+                if normalized_action == "BUY":
+                    price = stream.get_bid(symbol, max_age_seconds=5.0)
+                else:
+                    price = stream.get_ask(symbol, max_age_seconds=5.0)
+                if price is not None:
+                    return price
+        return await self.get_current_price(symbol)
+
     @staticmethod
     def _get_stream_price(symbol: str) -> float | None:
         stream = get_market_stream()

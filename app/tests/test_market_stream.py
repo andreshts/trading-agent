@@ -74,6 +74,24 @@ def test_market_service_prefers_stream_cache_over_rest() -> None:
     assert price == pytest.approx(70000.0)
 
 
+def test_market_service_uses_book_side_for_exit_reference() -> None:
+    stream = BinanceMarketDataStream(symbols=["BTCUSDT"])
+    stream.handle_event({"data": {"s": "BTCUSDT", "b": "67000", "a": "67002"}})
+    set_market_stream(stream)
+
+    service = MarketService(provider="binance")
+
+    async def call() -> tuple[float | None, float | None]:
+        return (
+            await service.get_exit_reference_price("BTCUSDT", "BUY"),
+            await service.get_exit_reference_price("BTCUSDT", "SELL"),
+        )
+
+    long_exit_price, short_exit_price = asyncio.run(call())
+    assert long_exit_price == pytest.approx(67000.0)
+    assert short_exit_price == pytest.approx(67002.0)
+
+
 def test_market_service_falls_back_when_stream_stale() -> None:
     stream = BinanceMarketDataStream(symbols=["BTCUSDT"])
     stream.handle_event({"data": {"s": "BTCUSDT", "c": "70000"}})

@@ -23,6 +23,7 @@ from app.services.ai_signal_service import AISignalService
 from app.services.autonomous_runner import AutonomousRunner
 from app.services.market_service import MarketService
 from app.services.paper_trading import PaperTradingExecutor
+from app.services.protective_exit_monitor import evaluate_protective_exits
 from app.services.risk_manager import RiskManager
 from app.services.symbol_lock import get_symbol_lock_registry
 from app.services.system_state import SystemStateService
@@ -69,10 +70,15 @@ async def process_autonomous_tick(
 
         closed_positions = []
 
-        if current_price is not None:
-            closed_positions = executor.evaluate_open_positions(request.symbol, current_price)
-            for position in closed_positions:
-                system_state.register_closed_position(position.realized_pnl or 0)
+        exit_evaluation = await evaluate_protective_exits(
+            executor=executor,
+            market_service=market_service,
+            system_state=system_state,
+            symbols=[request.symbol],
+            fallback_prices={request.symbol: current_price} if current_price is not None else None,
+            use_symbol_locks=False,
+        )
+        closed_positions = exit_evaluation.closed_positions
 
         audit = get_audit_logger()
 

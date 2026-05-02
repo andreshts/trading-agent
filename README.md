@@ -73,8 +73,15 @@ DEFAULT_ORDER_QUANTITY=0.001
 ```
 
 En esta fase, Spot Testnet abre posiciones `BUY` con orden `MARKET` y cierra posiciones
-con una orden `SELL` `MARKET` cuando el loop detecta `stop_loss`, `take_profit` o cierre
-manual. Las señales `SELL` no abren shorts porque Binance Spot no opera shorts.
+con una orden `SELL` `MARKET` cuando el monitor de proteccion detecta `stop_loss`,
+`take_profit` o cierre manual. Ese monitor corre independiente del tick de IA y revisa
+bid/ask cada segundo por defecto. Las señales `SELL` no abren shorts porque Binance Spot
+no opera shorts.
+
+```env
+PROTECTIVE_EXIT_MONITOR_ENABLED=true
+PROTECTIVE_EXIT_MONITOR_INTERVAL_SECONDS=1.0
+```
 
 `binance_live` queda bloqueado mientras `REAL_TRADING_ENABLED=false`.
 

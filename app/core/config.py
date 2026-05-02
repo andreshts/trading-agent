@@ -89,6 +89,8 @@ class Settings(BaseSettings):
     autonomous_circuit_breaker_max_consecutive_errors: int = Field(default=5, ge=1)
     autonomous_circuit_breaker_backoff_base_seconds: float = Field(default=1.0, ge=0)
     autonomous_circuit_breaker_backoff_max_seconds: float = Field(default=60.0, ge=0)
+    protective_exit_monitor_enabled: bool = True
+    protective_exit_monitor_interval_seconds: float = Field(default=1.0, ge=0.2)
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
