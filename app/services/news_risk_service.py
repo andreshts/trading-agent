@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
@@ -66,6 +67,12 @@ class AlphaVantageNewsProvider:
         return value.strftime("%Y%m%dT%H%M")
 
 
+@dataclass
+class DailyRequestBudget:
+    date_key: str
+    used: int = 0
+
+
 class NewsRiskService:
     HIGH_IMPACT_KEYWORDS = {
         "bankruptcy",
@@ -103,15 +110,18 @@ class NewsRiskService:
         provider: NewsProvider,
         enabled: bool = True,
         lookback_minutes: int = 90,
-        cache_ttl_seconds: int = 300,
+        cache_ttl_seconds: int = 3600,
+        daily_request_limit: int = 20,
         audit_logger: AuditLogger | None = None,
     ) -> None:
         self.provider = provider
         self.enabled = enabled
         self.lookback_minutes = lookback_minutes
         self.cache_ttl_seconds = cache_ttl_seconds
+        self.daily_request_limit = daily_request_limit
         self.audit_logger = audit_logger
         self._cache: dict[str, tuple[float, NewsRiskDecision]] = {}
+        self._daily_budget = DailyRequestBudget(date_key=self._today_key())
 
     async def evaluate(self, symbol: str) -> NewsRiskDecision:
         normalized_symbol = symbol.upper()
@@ -122,6 +132,12 @@ class NewsRiskService:
         now = time.monotonic()
         if cached and now - cached[0] <= self.cache_ttl_seconds:
             return cached[1]
+
+        if not self._consume_daily_request_budget():
+            decision = self._budget_exhausted_decision(cached)
+            self._cache[normalized_symbol] = (now, decision)
+            self._audit(normalized_symbol, decision)
+            return decision
 
         try:
             items = await self.provider.fetch_news(normalized_symbol, self.lookback_minutes)
@@ -135,12 +151,49 @@ class NewsRiskService:
             )
 
         self._cache[normalized_symbol] = (now, decision)
+        self._audit(normalized_symbol, decision)
+        return decision
+
+    def _audit(self, symbol: str, decision: NewsRiskDecision) -> None:
         if self.audit_logger:
             self.audit_logger.record(
                 "news_risk_decision",
-                {"symbol": normalized_symbol, **decision.model_dump(mode="json")},
+                {"symbol": symbol, **decision.model_dump(mode="json")},
             )
-        return decision
+
+    def _consume_daily_request_budget(self) -> bool:
+        today = self._today_key()
+        if self._daily_budget.date_key != today:
+            self._daily_budget = DailyRequestBudget(date_key=today)
+        if self._daily_budget.used >= self.daily_request_limit:
+            return False
+        self._daily_budget.used += 1
+        return True
+
+    def _budget_exhausted_decision(
+        self,
+        cached: tuple[float, NewsRiskDecision] | None,
+    ) -> NewsRiskDecision:
+        if cached is not None:
+            previous = cached[1]
+            return previous.model_copy(
+                update={
+                    "summary": (
+                        f"{previous.summary} News provider daily budget exhausted; "
+                        "using last cached decision."
+                    )
+                }
+            )
+        return NewsRiskDecision(
+            risk_level="UNKNOWN",
+            action="allow",
+            summary="News provider daily budget exhausted; allowing entries without fresh news.",
+            confidence=0,
+        )
+
+    @staticmethod
+    def _today_key() -> str:
+        return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     def _classify(self, items: list[dict[str, Any]]) -> NewsRiskDecision:
         relevant = [item for item in items if self._is_recent(item)]

@@ -55,12 +55,26 @@ def test_news_risk_allows_when_no_high_impact_headlines() -> None:
 
 def test_news_risk_uses_cache() -> None:
     provider = FakeNewsProvider([])
-    service = NewsRiskService(provider=provider, cache_ttl_seconds=300)
+    service = NewsRiskService(provider=provider, cache_ttl_seconds=3600)
 
     asyncio.run(service.evaluate("BTCUSDT"))
     asyncio.run(service.evaluate("BTCUSDT"))
 
     assert provider.calls == 1
+
+
+def test_news_risk_obeys_daily_request_budget() -> None:
+    provider = FakeNewsProvider([])
+    service = NewsRiskService(provider=provider, cache_ttl_seconds=0, daily_request_limit=1)
+
+    first = asyncio.run(service.evaluate("BTCUSDT"))
+    second = asyncio.run(service.evaluate("ETHUSDT"))
+
+    assert provider.calls == 1
+    assert first.action == "allow"
+    assert second.action == "allow"
+    assert second.risk_level == "UNKNOWN"
+    assert "daily budget exhausted" in second.summary
 
 
 def test_news_risk_fails_open_when_provider_errors() -> None:

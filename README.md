@@ -108,8 +108,9 @@ posicion si Binance informa que la OCO ya ejecuto la salida.
 ### Filtro de riesgo por noticias
 
 Si configuras `ALPHA_VANTAGE_API_KEY`, el backend consulta `NEWS_SENTIMENT` antes de
-abrir nuevas posiciones. El filtro usa cache de 5 minutos y mira noticias de los ultimos
-90 minutos para el activo (`BTCUSDT` -> `CRYPTO:BTC`). Solo actua como
+abrir nuevas posiciones. Para respetar el limite gratuito de Alpha Vantage, el filtro usa
+cache de 1 hora y un presupuesto interno de 20 consultas por dia. Mira noticias de los
+ultimos 90 minutos para el activo (`BTCUSDT` -> `CRYPTO:BTC`). Solo actua como
 `block_new_entries`: no cierra posiciones ni bloquea TP/SL, OCO o cierres manuales.
 
 ```env
