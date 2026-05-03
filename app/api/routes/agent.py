@@ -5,6 +5,7 @@ from app.api.deps import (
     get_audit_logger,
     get_autonomous_runner,
     get_market_service,
+    get_news_risk_service,
     get_paper_executor,
     get_risk_manager,
     get_system_state,
@@ -22,6 +23,7 @@ from app.providers.ai_provider import hold_signal
 from app.services.ai_signal_service import AISignalService
 from app.services.autonomous_runner import AutonomousRunner
 from app.services.market_service import MarketService
+from app.services.news_risk_service import NewsRiskService
 from app.services.paper_trading import PaperTradingExecutor
 from app.services.protective_exit_monitor import evaluate_protective_exits
 from app.services.risk_manager import RiskManager
@@ -61,6 +63,7 @@ async def process_autonomous_tick(
     executor: PaperTradingExecutor,
     system_state: SystemStateService,
     market_service: MarketService,
+    news_risk_service: NewsRiskService,
 ) -> AgentTickResult:
     symbol_lock = get_symbol_lock_registry().get(request.symbol)
     async with symbol_lock:
@@ -102,6 +105,23 @@ async def process_autonomous_tick(
                 closed_positions=closed_positions,
                 run_result=None,
                 reason="Ya existe una posición abierta para el símbolo.",
+            )
+
+        news_risk = await news_risk_service.evaluate(request.symbol)
+        if news_risk.action == "block_new_entries":
+            reason = f"Tick bloqueado por riesgo de noticias: {news_risk.summary}"
+            audit.record(
+                "autonomous_runner_tick",
+                {"symbol": request.symbol, "skipped": True, "reason": reason},
+            )
+            return AgentTickResult(
+                closed_positions=closed_positions,
+                run_result=AgentRunResult(
+                    signal=hold_signal(request.symbol, reason),
+                    risk_decision=RiskDecision(approved=False, reason=reason),
+                    execution_result=None,
+                ),
+                reason=reason,
             )
 
         account_state = account_state_for_risk(system_state, executor)
@@ -173,6 +193,7 @@ async def run_agent(
     executor: PaperTradingExecutor = Depends(get_paper_executor),
     system_state: SystemStateService = Depends(get_system_state),
     market_service: MarketService = Depends(get_market_service),
+    news_risk_service: NewsRiskService = Depends(get_news_risk_service),
 ) -> AgentRunResult:
     symbol_lock = get_symbol_lock_registry().get(request.symbol)
     async with symbol_lock:
@@ -183,6 +204,15 @@ async def run_agent(
                     approved=False,
                     reason="Ya existe una posición abierta para el símbolo.",
                 ),
+                execution_result=None,
+            )
+
+        news_risk = await news_risk_service.evaluate(request.symbol)
+        if news_risk.action == "block_new_entries":
+            reason = f"Operación bloqueada por riesgo de noticias: {news_risk.summary}"
+            return AgentRunResult(
+                signal=hold_signal(request.symbol, reason),
+                risk_decision=RiskDecision(approved=False, reason=reason),
                 execution_result=None,
             )
 
@@ -238,6 +268,7 @@ async def autonomous_tick(
     executor: PaperTradingExecutor = Depends(get_paper_executor),
     system_state: SystemStateService = Depends(get_system_state),
     market_service: MarketService = Depends(get_market_service),
+    news_risk_service: NewsRiskService = Depends(get_news_risk_service),
 ) -> AgentTickResult:
     return await process_autonomous_tick(
         request=request,
@@ -246,6 +277,7 @@ async def autonomous_tick(
         executor=executor,
         system_state=system_state,
         market_service=market_service,
+        news_risk_service=news_risk_service,
     )
 
 
@@ -258,6 +290,7 @@ async def start_autonomous_runner(
     executor: PaperTradingExecutor = Depends(get_paper_executor),
     system_state: SystemStateService = Depends(get_system_state),
     market_service: MarketService = Depends(get_market_service),
+    news_risk_service: NewsRiskService = Depends(get_news_risk_service),
 ) -> AutonomousRunnerStatus:
     async def tick_handler(tick_request: AgentTickRequest) -> AgentTickResult:
         return await process_autonomous_tick(
@@ -267,6 +300,7 @@ async def start_autonomous_runner(
             executor=executor,
             system_state=system_state,
             market_service=market_service,
+            news_risk_service=news_risk_service,
         )
 
     return AutonomousRunnerStatus.model_validate(

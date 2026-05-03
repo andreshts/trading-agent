@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     # to the response). >0 sets an explicit budget. -1 leaves the model default
     # which for 2.5 Flash means dynamic thinking and risks truncated JSON.
     gemini_thinking_budget: int = Field(default=0, ge=-1, le=24576)
+    alpha_vantage_api_key: str = "replace_me"
 
     trading_enabled: bool = True
     paper_trading_enabled: bool = True
@@ -91,6 +92,7 @@ class Settings(BaseSettings):
     autonomous_circuit_breaker_backoff_max_seconds: float = Field(default=60.0, ge=0)
     protective_exit_monitor_enabled: bool = True
     protective_exit_monitor_interval_seconds: float = Field(default=1.0, ge=0.2)
+    news_risk_enabled: bool = True
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

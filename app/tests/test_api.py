@@ -1,7 +1,9 @@
 from fastapi.testclient import TestClient
 
 from app.core.config import Settings, get_settings
+from app.api.deps import get_news_risk_service
 from app.main import app
+from app.schemas.news import NewsRiskDecision
 
 
 client = TestClient(app)
@@ -91,6 +93,38 @@ def test_autonomous_tick_opens_and_then_closes_position() -> None:
     assert closed_response.status_code == 200
     assert len(closed_payload["closed_positions"]) == 1
     assert closed_payload["closed_positions"][0]["status"] == "CLOSED"
+
+
+def test_autonomous_tick_blocks_new_entry_on_high_news_risk() -> None:
+    class BlockingNewsRiskService:
+        async def evaluate(self, symbol: str) -> NewsRiskDecision:
+            return NewsRiskDecision(
+                risk_level="BLOCK",
+                action="block_new_entries",
+                summary="High-impact news detected.",
+                confidence=0.9,
+            )
+
+    app.dependency_overrides[get_news_risk_service] = lambda: BlockingNewsRiskService()
+    client.post("/system/simulation/reset")
+    try:
+        response = client.post(
+            "/agent/autonomous/tick",
+            json={
+                "symbol": "BTCUSDT",
+                "timeframe": "1h",
+                "current_price": 64200,
+                "market_context": "Precio 64200 en tendencia alcista.",
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(get_news_risk_service, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["run_result"]["risk_decision"]["approved"] is False
+    assert "riesgo de noticias" in payload["reason"]
+    assert payload["run_result"]["execution_result"] is None
 
 
 def test_simulation_reset_is_blocked_outside_paper_mode() -> None:

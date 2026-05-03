@@ -17,6 +17,7 @@ from app.services.binance_multi_market import (
 )
 from app.services.kill_switch import KillSwitchService
 from app.services.market_service import MarketService
+from app.services.news_risk_service import AlphaVantageNewsProvider, NewsRiskService
 from app.services.paper_trading import PaperTradingExecutor
 from app.services.risk_manager import RiskManager
 from app.services.system_state import SystemStateService
@@ -88,6 +89,17 @@ def get_market_service() -> MarketService:
         timeout_seconds=settings.market_data_timeout_seconds,
         kline_limit=settings.market_data_kline_limit,
         price_cache_ttl_seconds=settings.market_data_price_cache_ttl_seconds,
+    )
+
+
+@lru_cache
+def get_news_risk_service() -> NewsRiskService:
+    settings = get_settings()
+    provider = AlphaVantageNewsProvider(api_key=settings.alpha_vantage_api_key)
+    return NewsRiskService(
+        provider=provider,
+        enabled=settings.news_risk_enabled and provider.configured,
+        audit_logger=get_audit_logger(),
     )
 
 
