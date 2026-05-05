@@ -73,6 +73,7 @@ async def process_autonomous_tick(
 
         closed_positions = []
 
+        audit = get_audit_logger()
         exit_evaluation = await evaluate_protective_exits(
             executor=executor,
             market_service=market_service,
@@ -80,10 +81,9 @@ async def process_autonomous_tick(
             symbols=[request.symbol],
             fallback_prices={request.symbol: current_price} if current_price is not None else None,
             use_symbol_locks=False,
+            audit_logger=audit,
         )
         closed_positions = exit_evaluation.closed_positions
-
-        audit = get_audit_logger()
 
         if not request.open_new_position:
             audit.record(

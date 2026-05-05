@@ -500,11 +500,13 @@ class BinanceSpotExecutor(PaperTradingExecutor):
                 requested_price=exit_price,
             )
 
+        sell_quantity = self._resolve_sell_quantity(symbol, trade_quantity)
+
         exit_intent_id = intent_id or self._new_intent_id(f"exit-{position_id}")
         order = self._place_order_with_reconciliation(
             symbol=symbol,
             side="SELL",
-            quantity=trade_quantity,
+            quantity=sell_quantity,
             price=exit_price,
             intent_id=exit_intent_id,
             role="exit",
@@ -516,10 +518,18 @@ class BinanceSpotExecutor(PaperTradingExecutor):
             side="SELL",
             order_type=self.order_type.upper(),
             position_id=position_id,
-            requested_quantity=trade_quantity,
+            requested_quantity=sell_quantity,
             requested_price=exit_price,
         )
         actual_exit_price = self._average_fill_price(order) or exit_price
+        executed_sell_qty = self._executed_quantity(order) or sell_quantity
+
+        if executed_sell_qty > 0 and abs(executed_sell_qty - trade_quantity) > 1e-12:
+            with SessionLocal() as db:
+                stored = db.get(PaperPosition, position_id)
+                if stored is not None:
+                    stored.quantity = executed_sell_qty
+                    db.commit()
 
         schema = super().close_position(
             position_id=position_id,
@@ -785,6 +795,78 @@ class BinanceSpotExecutor(PaperTradingExecutor):
                 )
             return None
         return tick_size if tick_size > 0 else None
+
+    def _lot_step_size(self, symbol: str) -> float | None:
+        try:
+            filters = self.client.get_symbol_filters(symbol)
+            lot_filter = filters.get("LOT_SIZE") or {}
+            step_size = float(lot_filter.get("stepSize") or 0)
+        except Exception as exc:
+            if self.audit_logger:
+                self.audit_logger.record(
+                    "binance_symbol_filters_unavailable",
+                    {"symbol": symbol.upper(), "error": str(exc)},
+                )
+            return None
+        return step_size if step_size > 0 else None
+
+    @staticmethod
+    def _base_asset_from_symbol(symbol: str) -> str | None:
+        normalized = symbol.upper()
+        for quote in ("USDT", "BUSD", "USDC", "FDUSD", "TUSD", "BTC", "ETH", "BNB"):
+            if normalized.endswith(quote) and len(normalized) > len(quote):
+                return normalized[: -len(quote)]
+        return None
+
+    def _free_base_balance(self, symbol: str) -> float | None:
+        base_asset = self._base_asset_from_symbol(symbol)
+        if base_asset is None:
+            return None
+        try:
+            account = self.client.get_account()
+        except Exception as exc:
+            if self.audit_logger:
+                self.audit_logger.record(
+                    "binance_account_balance_unavailable",
+                    {"symbol": symbol.upper(), "error": str(exc)},
+                )
+            return None
+        for balance in account.get("balances", []):
+            if str(balance.get("asset", "")).upper() != base_asset:
+                continue
+            try:
+                return float(balance.get("free") or 0)
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    def _resolve_sell_quantity(
+        self,
+        symbol: str,
+        requested_quantity: float,
+    ) -> float:
+        """Cap requested quantity to free base-asset balance and round to LOT_SIZE.
+
+        Binance descuenta la fee del activo base en compras MARKET, así que el
+        balance libre puede ser < requested_quantity. Vender la cantidad
+        registrada en la posición provocaría 'insufficient balance' y dejaría
+        la posición sin cerrar.
+        """
+        free_balance = self._free_base_balance(symbol)
+        target = requested_quantity
+        if free_balance is not None and free_balance < target:
+            target = free_balance
+
+        step_size = self._lot_step_size(symbol)
+        if step_size is not None:
+            target = self._round_down_to_step(target, step_size)
+
+        if target <= 0:
+            raise RuntimeError(
+                f"No hay saldo suficiente para cerrar {symbol.upper()}: "
+                f"requerido={requested_quantity:g}, libre={free_balance!r}."
+            )
+        return target
 
     @staticmethod
     def _round_down_to_step(value: float, step: float) -> float:

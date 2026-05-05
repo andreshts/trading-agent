@@ -1,17 +1,23 @@
 import asyncio
+import logging
 from dataclasses import dataclass, field
 
 from app.schemas.trade import PaperPosition
+from app.services.audit_logger import AuditLogger
 from app.services.market_service import MarketService
 from app.services.paper_trading import PaperTradingExecutor
 from app.services.symbol_lock import get_symbol_lock_registry
 from app.services.system_state import SystemStateService
 
 
+logger = logging.getLogger(__name__)
+
+
 @dataclass
 class ProtectiveExitEvaluation:
     prices: dict[str, float] = field(default_factory=dict)
     closed_positions: list[PaperPosition] = field(default_factory=list)
+    failed_symbols: dict[str, str] = field(default_factory=dict)
 
 
 async def evaluate_protective_exits(
@@ -22,6 +28,7 @@ async def evaluate_protective_exits(
     symbols: list[str] | set[str] | None = None,
     fallback_prices: dict[str, float] | None = None,
     use_symbol_locks: bool = True,
+    audit_logger: AuditLogger | None = None,
 ) -> ProtectiveExitEvaluation:
     symbol_filter = {symbol.upper() for symbol in symbols} if symbols else None
     fallback_prices = {symbol.upper(): price for symbol, price in (fallback_prices or {}).items()}
@@ -46,11 +53,27 @@ async def evaluate_protective_exits(
                 continue
 
         result.prices[symbol] = price
-        if use_symbol_locks:
-            async with locks.get(symbol):
+        try:
+            if use_symbol_locks:
+                async with locks.get(symbol):
+                    closed = await asyncio.to_thread(executor.evaluate_open_positions, symbol, price)
+            else:
                 closed = await asyncio.to_thread(executor.evaluate_open_positions, symbol, price)
-        else:
-            closed = await asyncio.to_thread(executor.evaluate_open_positions, symbol, price)
+        except Exception as exc:
+            error_message = f"{type(exc).__name__}: {exc}"
+            result.failed_symbols[symbol] = error_message
+            logger.exception("protective close failed for %s", symbol)
+            if audit_logger is not None:
+                audit_logger.record(
+                    "protective_close_failed",
+                    {
+                        "symbol": symbol,
+                        "price": price,
+                        "open_positions": [position.id for position in symbol_positions],
+                        "error": error_message,
+                    },
+                )
+            continue
 
         for position in closed:
             system_state.register_closed_position(position.realized_pnl or 0)

@@ -34,15 +34,22 @@ async def _protective_exit_monitor_loop() -> None:
     """Continuously enforce protective exits for open positions."""
     bus = get_event_bus()
     # Lazy imports to avoid touching dependencies before settings are ready.
-    from app.api.deps import get_market_service, get_paper_executor, get_system_state
+    from app.api.deps import (
+        get_audit_logger,
+        get_market_service,
+        get_paper_executor,
+        get_system_state,
+    )
 
     while True:
         try:
             executor = get_paper_executor()
+            audit_logger = get_audit_logger()
             result = await evaluate_protective_exits(
                 executor=executor,
                 market_service=get_market_service(),
                 system_state=get_system_state(),
+                audit_logger=audit_logger,
             )
             if result.prices and bus.has_subscribers():
                 bus.publish("position_prices", {"prices": result.prices})

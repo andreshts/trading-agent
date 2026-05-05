@@ -77,13 +77,23 @@ class FakeBinanceClient:
         }
 
     def get_account(self) -> dict:
-        return {"balances": [{"asset": "USDT", "free": "2500", "locked": "0"}]}
+        return {
+            "balances": [
+                {"asset": "USDT", "free": "2500", "locked": "0"},
+                {"asset": "BTC", "free": "1", "locked": "0"},
+                {"asset": "ETH", "free": "10", "locked": "0"},
+            ]
+        }
 
     def get_symbol_filters(self, symbol: str) -> dict:
         return {
             "PRICE_FILTER": {
                 "tickSize": "0.01000000",
-            }
+            },
+            "LOT_SIZE": {
+                "stepSize": "0.00001000",
+                "minQty": "0.00001000",
+            },
         }
 
     def create_oco_sell_order(
